@@ -1,0 +1,101 @@
+# ComfyUI Ovi Advanced Nodes
+
+Custom nodes that bring Character.AI's **Ovi** video+audio generator to ComfyUI with streamlined setup, selectable precision, attention-backend control, and per-node device targeting for multi-GPU rigs.
+
+---
+
+## Key Features
+
+- **Self-bootstrapping loader** – downloads MMAudio assets and the chosen Ovi fusion weights to `custom_nodes/ComfyUI-Ovi/ckpts`, then places the OVI safetensors in `models/diffusion_models/`.
+- **Precision toggle** – pick **Ovi-11B BF16** or the 24 GB-friendly **Ovi-11B FP8** from a dropdown; each mode is cached separately.
+- **Optional CPU offload** – move large modules to system RAM when VRAM is tight.
+- **Attention selector** – flip between `auto`, FlashAttention, SDPA, Sage, etc., at runtime.
+- **Component reuse** – keep using the Wan 2.2 VAE and UMT5 text encoder you already installed (no duplicated files!); the component loader will point to the correct location (see below).
+- **Device targeting** – the loader exposes a `device` field so you can pin Ovi to any GPU in multi-card systems.
+
+---
+
+## Requirements
+
+- **GPU**: 24 GB (FP8 + offload) or 32 GB+ (BF16 without offload)
+- **CUDA stack**: PyTorch 2.4+, CUDA 12.x driver/runtime
+
+---
+
+## Installation
+
+```bash
+# from ComfyUI/custom_nodes
+git clone https://github.com/your-org/ComfyUI-Ovi.git
+cd ComfyUI-Ovi
+pip install -r requirements.txt
+```
+
+Restart ComfyUI after installing.
+
+---
+
+## Weights Overview
+
+Handled automatically by **Ovi Engine Loader**:
+
+- `MMAudio/ext_weights/{best_netG.pt, v1-16.pth}`
+- `Ovi-11B-bf16.safetensors` or `Ovi-11B-fp8.safetensors` (renamed and parked in `models/diffusion_models/`)
+
+Provide manually if missing (usually already present in Wan setups):
+
+- [`umt5-xxl-enc-bf16.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-bf16.safetensors) → `models/text_encoders`
+- [`wan2.2_vae.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/main/split_files/vae/wan2.2_vae.safetensors) → `models/vae`
+
+Directory sketch:
+
+```
+ComfyUI/
+├── models/
+│   ├── diffusion_models/
+│   │   ├── Ovi-11B-bf16.safetensors
+│   │   └── Ovi-11B-fp8.safetensors
+│   ├── text_encoders/umt5-xxl-enc-bf16.safetensors
+│   └── vae/wan2.2_vae.safetensors
+└── custom_nodes/ComfyUI-Ovi/ckpts/MMAudio/ext_weights/...
+```
+
+---
+
+## Available Nodes
+
+| Node | Description |
+| --- | --- |
+| **Ovi Engine Loader** | Downloads missing weights, builds the fusion engine, exposes `OVI_ENGINE`, lets you pick precision/offload/device (multi-GPU ready). |
+| **Ovi Wan Component Loader** | Optional override so you can point the engine to Wan VAE + UMT5 files stored elsewhere. |
+| **Ovi Attention Selector** | Switch attention backend for the live engine (`auto`, FlashAttention, SDPA, xFormers, native…). |
+| **Ovi Video Generator** | Runs `OviFusionEngine.generate` and returns `IMAGE` frames plus an `AUDIO` waveform (16 kHz). |
+
+All nodes live under the **Ovi** category in the ComfyUI search dialog.
+
+---
+
+## Quick Start Workflow
+
+1. **Load engine** – drop *Ovi Engine Loader*, choose precision (BF16 vs FP8), enable CPU offload if you are on a 24 GB GPU, select device.
+2. **(Optional) Add Wan components** – connect *Ovi Wan Component Loader* if your VAE/encoder live outside the default folders.
+3. **Tune attention** – insert *Ovi Attention Selector* to lock a backend, otherwise leave on `auto`.
+4. **Generate** – wire the engine into *Ovi Video Generator*, enter your prompt (supports `<S>…<E>` speech and `<AUDCAP>…<ENDAUDCAP>` audio tags), optionally feed a first-frame image.
+5. **Export** – connect the resulting `IMAGE` tensor sequence and `AUDIO` dict to your preferred save nodes.
+
+---
+
+## Tips & Troubleshooting
+
+- **High VRAM after a run** – use ComfyUI’s *Unload Models*; the engine rebuilds itself automatically on next use.
+- **Missing weights** – place the files manually in the paths above; the loader skips network calls when files already exist.
+- **Switching precision** – changing the dropdown spins up a new cached engine; you can hot-swap without restarting ComfyUI.
+- **Backend errors** – if FlashAttention/xFormers is unavailable, the selector falls back to `native`; check the console log for details.
+
+---
+
+## Credits
+
+- *Ovi: Twin Backbone Cross-Modal Fusion for Audio-Video Generation* (Character.AI)
+- Wan 2.2 VAE, MMAudio, UMT5 ecosystem maintainers
+- RunningHub’s ComfyUI prototype for the original integration ideas

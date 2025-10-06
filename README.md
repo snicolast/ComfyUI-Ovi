@@ -4,6 +4,8 @@ Custom nodes that bring Character.AI's **Ovi** video+audio generator to ComfyUI 
 
 ---
 
+![ComfyUI Ovi nodes](images/example.png "ComfyUI Ovi workflow")
+
 ## Key Features
 
 - **Self-bootstrapping loader** – downloads MMAudio assets and the chosen Ovi fusion weights to `custom_nodes/ComfyUI-Ovi/ckpts`, then places the OVI safetensors in `models/diffusion_models/`.
@@ -99,3 +101,4 @@ All nodes live under the **Ovi** category in the ComfyUI search dialog.
 - *Ovi: Twin Backbone Cross-Modal Fusion for Audio-Video Generation* (Character.AI)
 - Wan 2.2 VAE, MMAudio, UMT5 ecosystem maintainers
 - RunningHub’s ComfyUI prototype for the original integration ideas
+

@@ -1,4 +1,4 @@
-# ComfyUI Ovi Advanced Nodes
+# ComfyUI-Ovi
 
 Custom nodes that bring Character.AI's **Ovi** video+audio generator to ComfyUI with streamlined setup, selectable precision, attention-backend control, and per-node device targeting for multi-GPU rigs.
 

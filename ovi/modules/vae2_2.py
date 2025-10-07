@@ -6,6 +6,10 @@ import torch
 import torch.cuda.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
+try:
+    from comfy.utils import ProgressBar
+except Exception:  # pragma: no cover
+    ProgressBar = None  # type: ignore
 from einops import rearrange
 from safetensors.torch import load_file as safetensors_load
 
@@ -822,7 +826,7 @@ class WanVAE_(nn.Module):
         self.clear_cache()
         return mu
 
-    def decode(self, z, scale):
+    def decode(self, z, scale, pbar: ProgressBar | None = None):
         self.clear_cache()
         if isinstance(scale[0], torch.Tensor):
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(
@@ -830,6 +834,7 @@ class WanVAE_(nn.Module):
         else:
             z = z / scale[1] + scale[0]
         iter_ = z.shape[2]
+        local_pbar = ProgressBar(iter_) if (pbar and ProgressBar is not None) else None
         x = self.conv2(z)
         for i in range(iter_):
             self._conv_idx = [0]
@@ -847,6 +852,10 @@ class WanVAE_(nn.Module):
                     feat_idx=self._conv_idx,
                 )
                 out = torch.cat([out, out_], 2)
+            if local_pbar is not None:
+                local_pbar.update(1)
+        if local_pbar is not None and hasattr(local_pbar, "update_absolute"):
+            local_pbar.update_absolute(0)
         out = unpatchify(out, patch_size=2)
         self.clear_cache()
         return out
@@ -1093,7 +1102,8 @@ class Wan2_2_VAE:
         normalize: bool = False,
         return_cpu: bool = False,
         dtype: "torch.dtype | None" = torch.float32,
-    ) -> torch.Tensor:
+        pbar: ProgressBar | None = None,
+) -> torch.Tensor:
         if not isinstance(latents, torch.Tensor):
             raise TypeError("latents should be a torch.Tensor")
         target_device = device or self.device
@@ -1104,7 +1114,10 @@ class Wan2_2_VAE:
             raise ValueError("latents must have shape [C,F,H,W] or [B,C,F,H,W]")
 
         with amp.autocast(dtype=self.dtype):
-            decoded = self.model.decode(tensor, self.scale).float()
+            if ProgressBar is not None:
+                decoded = self.model.decode(tensor, self.scale, pbar=pbar).float()
+            else:
+                decoded = self.model.decode(tensor, self.scale).float()
 
         if normalize:
             vmin = decoded.amin()

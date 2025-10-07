@@ -16,6 +16,7 @@ from ovi.utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
 import traceback
 from omegaconf import OmegaConf
 from ovi.utils.processing_utils import clean_text, preprocess_image_tensor, snap_hw_to_multiple_of_32, scale_hw_to_area_divisible
+from comfy.utils import ProgressBar
 from ovi.modules.attention import available_attention_backends, get_attention_backend, set_attention_backend
 from ovi.utils.checkpoint_manager import (
     OVI_MODEL_SOURCE_NAME,
@@ -639,6 +640,7 @@ class OviFusionEngine:
                     normalize=True,
                     return_cpu=to_cpu,
                     dtype=torch.float32,
+                    pbar=ProgressBar(video_tensor.shape[1]) if to_cpu else None,
                 )
 
         finally:

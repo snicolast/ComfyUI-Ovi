@@ -13,7 +13,7 @@ Custom nodes that bring Character.AI's **Ovi** video+audio generator to ComfyUI 
 - **Optional CPU offload** – move large modules to system RAM when VRAM is tight.
 - **Attention selector** – flip between `auto`, FlashAttention, SDPA, Sage, etc., at runtime.
 - **Component reuse** – keep using the Wan 2.2 VAE and UMT5 text encoder you already installed (no duplicated files!); the component loader will point to the correct location (see below).
-- **Device targeting** – the loader exposes a `device` field so you can pin Ovi to any GPU in multi-card systems.
+- **Dloader auto-detects available GPUs; single-GPU setups hide the selector, while multi-GPU rigs get a dropdown to pick the target device.
 
 ---
 

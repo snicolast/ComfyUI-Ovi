@@ -1,11 +1,11 @@
 """ComfyUI node for initializing and caching the OviFusionEngine."""
 from __future__ import annotations
-
-import os
 from pathlib import Path
 from typing import Dict, Tuple
 
 import logging
+
+import torch
 
 import comfy.model_management as model_management
 from omegaconf import OmegaConf
@@ -67,11 +67,20 @@ class OviEngineLoader:
     CACHEABLE = False
     @classmethod
     def INPUT_TYPES(cls):
+        gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        device_inputs = {}
+        if gpu_count > 1:
+            device_choices = [
+                f"{idx}: {torch.cuda.get_device_name(idx)}" for idx in range(gpu_count)
+            ]
+            device_inputs["device"] = (device_choices, {"default": device_choices[0]})
+        elif gpu_count == 1:
+            device_inputs["device"] = ("INT", {"default": 0, "min": 0, "max": 0})
         return {
             "required": {
                 "model_precision": (MODEL_VARIANT_LABELS, {"default": MODEL_VARIANT_LABELS[0]}),
                 "cpu_offload": ("BOOLEAN", {"default": False}),
-                "device": ("INT", {"default": 0, "min": 0, "max": 7}),
+                **device_inputs,
             }
         }
 
@@ -80,10 +89,12 @@ class OviEngineLoader:
     FUNCTION = "load"
     CATEGORY = "Ovi"
 
-    def load(self, model_precision: str, cpu_offload: bool, device: int):
+    def load(self, model_precision: str, cpu_offload: bool, device=0):
         if model_precision not in _MODEL_VARIANT_LOOKUP:
             raise ValueError(f"Unknown model precision selection '{model_precision}'.")
         fp8, variant_key = _MODEL_VARIANT_LOOKUP[model_precision]
+        if isinstance(device, str):
+            device = int(device.split(":")[0].strip())
 
         config = _build_config(cpu_offload, fp8)
         try:

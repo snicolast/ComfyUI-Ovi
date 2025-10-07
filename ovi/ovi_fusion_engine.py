@@ -191,29 +191,11 @@ class OviFusionEngine:
 
     def override_models(self, video_vae=None, text_model=None):
         if video_vae is not None:
-            try:
-                video_vae.model = video_vae.model.to(device=self.device, dtype=torch.bfloat16).eval()
-            except AttributeError:
-                pass
-            if isinstance(getattr(video_vae, "scale", None), list):
-                video_vae.scale = [
-                    tensor.to(self.device, dtype=torch.bfloat16)
-                    if isinstance(tensor, torch.Tensor) else tensor
-                    for tensor in video_vae.scale
-                ]
             self.vae_model_video = video_vae
             self._override_video_vae = video_vae
-            if self.cpu_offload and hasattr(video_vae, "model"):
-                try:
-                    self.offload_to_cpu(video_vae.model)
-                except Exception:
-                    pass
-                if isinstance(getattr(video_vae, "scale", None), list):
-                    video_vae.scale = [
-                        tensor.to("cpu", dtype=torch.bfloat16)
-                        if isinstance(tensor, torch.Tensor) else tensor
-                        for tensor in video_vae.scale
-                    ]
+            self._set_video_vae_device(self.device)
+            if self.cpu_offload:
+                self._set_video_vae_device("cpu")
         if text_model is not None:
             model_obj = getattr(text_model, "model", text_model)
             try:
@@ -232,6 +214,23 @@ class OviFusionEngine:
 
     def _check_cancel(self):
         model_management.throw_exception_if_processing_interrupted()
+
+    def _set_video_vae_device(self, device: str):
+        video_vae = self._require_video_vae()
+        if hasattr(video_vae, "model"):
+            video_vae.model = video_vae.model.to(device=device, dtype=torch.bfloat16).eval()
+            if device == "cpu":
+                try:
+                    self.offload_to_cpu(video_vae.model)
+                except Exception:
+                    pass
+        if isinstance(getattr(video_vae, "scale", None), list):
+            video_vae.scale = [
+                tensor.to(device, dtype=torch.bfloat16)
+                if isinstance(tensor, torch.Tensor) else tensor
+                for tensor in video_vae.scale
+            ]
+        return video_vae
 
     def _require_video_vae(self):
         if self.vae_model_video is None:
@@ -401,7 +400,11 @@ class OviFusionEngine:
             if is_i2v:              
                 with torch.no_grad():
                     self._check_cancel()
-                    latents_images = self._require_video_vae().wrapped_encode(first_frame[:, :, None]).to(self.target_dtype).squeeze(0) # c 1 h w 
+                    video_vae = self._set_video_vae_device(self.device) if self.cpu_offload else self._require_video_vae()
+                    first_frame_tensor = first_frame.to(device=self.device, dtype=torch.bfloat16)
+                    latents_images = video_vae.wrapped_encode(first_frame_tensor[:, :, None]).to(self.target_dtype).squeeze(0) # c 1 h w 
+                    if self.cpu_offload:
+                        self._set_video_vae_device("cpu")
                 latents_images = latents_images.to(self.target_dtype)
                 video_latent_h, video_latent_w = latents_images.shape[2], latents_images.shape[3]
 
@@ -487,26 +490,11 @@ class OviFusionEngine:
                 # Decode video  
                 video_latents_for_vae = video_noise.unsqueeze(0)  # 1, c, f, h, w
                 self._check_cancel()
-                video_vae = self._require_video_vae()
-                if self.cpu_offload and hasattr(video_vae, "model"):
-                    video_vae.model = video_vae.model.to(self.device, dtype=torch.bfloat16).eval()
-                    if isinstance(getattr(video_vae, "scale", None), list):
-                        video_vae.scale = [
-                            tensor.to(self.device, dtype=torch.bfloat16)
-                            if isinstance(tensor, torch.Tensor) else tensor
-                            for tensor in video_vae.scale
-                        ]
-                generated_video = self._require_video_vae().wrapped_decode(video_latents_for_vae)
+                video_vae = self._set_video_vae_device(self.device) if self.cpu_offload else self._require_video_vae()
+                generated_video = video_vae.wrapped_decode(video_latents_for_vae)
                 generated_video = generated_video.squeeze(0).cpu().float().numpy()  # c, f, h, w
                 if self.cpu_offload:
-                    if hasattr(video_vae, "model"):
-                        self.offload_to_cpu(video_vae.model)
-                    if isinstance(getattr(video_vae, "scale", None), list):
-                        video_vae.scale = [
-                            tensor.to("cpu", dtype=torch.bfloat16)
-                            if isinstance(tensor, torch.Tensor) else tensor
-                            for tensor in video_vae.scale
-                        ]
+                    self._set_video_vae_device("cpu")
                     self.vae_model_audio = self.vae_model_audio.to("cpu")
             
             return generated_video, generated_audio, image

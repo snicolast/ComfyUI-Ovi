@@ -1,8 +1,3 @@
-import os
-import sys
-import uuid
-import cv2
-import glob
 import torch
 import logging
 import folder_paths
@@ -39,6 +34,54 @@ except Exception:
 OVI_MODEL_CANDIDATES_BF16 = [Path(p) / OVI_MODEL_TARGET_NAME for p in _DIFFUSION_MODEL_DIRS]
 OVI_MODEL_CANDIDATES_FP8 = [Path(p) / OVI_MODEL_FP8_TARGET_NAME for p in _DIFFUSION_MODEL_DIRS]
 
+_AUTO_KEEP_VIDEO_MARGIN_BYTES = 4 * 1024 ** 3  # ~4 GB headroom
+_AUTO_KEEP_AUDIO_MARGIN_BYTES = 1 * 1024 ** 3  # ~1 GB headroom
+
+
+def _module_size_bytes(module) -> int:
+    total = 0
+    if module is None:
+        return total
+    seen = set()
+
+    def _accumulate(mod):
+        nonlocal total
+        if mod is None or id(mod) in seen:
+            return
+        seen.add(id(mod))
+        if isinstance(mod, torch.nn.Module):
+            for param in mod.parameters(recurse=False):
+                total += param.numel() * param.element_size()
+            for buffer in mod.buffers(recurse=False):
+                total += buffer.numel() * buffer.element_size()
+            for child in mod.children():
+                _accumulate(child)
+
+    if isinstance(module, torch.nn.Module):
+        _accumulate(module)
+    elif hasattr(module, "model") and isinstance(module.model, torch.nn.Module):
+        _accumulate(module.model)
+
+    return total
+
+
+def _gpu_memory_info(device_index: int) -> tuple[int | None, int | None]:
+    if not torch.cuda.is_available():
+        return None, None
+    try:
+        torch.cuda.device(device_index)
+    except Exception:
+        pass
+    try:
+        free_mem, total_mem = torch.cuda.mem_get_info(device_index)
+        return int(free_mem), int(total_mem)
+    except Exception:
+        try:
+            props = torch.cuda.get_device_properties(device_index)
+            return None, int(getattr(props, "total_memory", 0))
+        except Exception:
+            return None, None
+
 
 class OviFusionEngine:
     def __init__(self, config=DEFAULT_CONFIG, device=0, target_dtype=torch.bfloat16):
@@ -68,12 +111,15 @@ class OviFusionEngine:
             vae_model_video.model.requires_grad_(False).eval()
             vae_model_video.model = vae_model_video.model.bfloat16()
             self.vae_model_video = vae_model_video
+            self._video_vae_size_bytes = _module_size_bytes(getattr(vae_model_video, "model", vae_model_video))
         else:
             self.vae_model_video = None
+            self._video_vae_size_bytes = 0
 
         vae_model_audio = init_mmaudio_vae(config.ckpt_dir, rank=device)
         vae_model_audio.requires_grad_(False).eval()
         self.vae_model_audio = vae_model_audio.bfloat16()
+        self._audio_vae_size_bytes = _module_size_bytes(getattr(self.vae_model_audio, "model", self.vae_model_audio))
 
         # Load T5 text model
         text_model_path = Path(config.ckpt_dir) / "Wan2.2-TI2V-5B" / "models_t5_umt5-xxl-enc-bf16.pth"
@@ -178,6 +224,38 @@ class OviFusionEngine:
             backend,
         )
         return resolved
+
+    def _device_index(self) -> int:
+        if isinstance(self.device, int):
+            return self.device
+        if isinstance(self.device, str):
+            if self.device.startswith("cuda:"):
+                try:
+                    return int(self.device.split(":", 1)[1])
+                except (ValueError, IndexError):
+                    return 0
+            try:
+                return int(self.device)
+            except ValueError:
+                return 0
+        return 0
+
+    def _should_keep_module_on_device(self, module_bytes: int, margin_bytes: int) -> bool:
+        if not (self.cpu_offload and module_bytes > 0 and torch.cuda.is_available()):
+            return False
+        free_mem, total_mem = _gpu_memory_info(self._device_index())
+        if free_mem is None:
+            return False
+        required = module_bytes + margin_bytes
+        if free_mem >= required:
+            logging.debug(
+                "OVI auto-keep enabled (module %.2f GB, free %.2f GB, margin %.2f GB)",
+                module_bytes / 1e9,
+                free_mem / 1e9,
+                margin_bytes / 1e9,
+            )
+            return True
+        return False
 
     def get_config(self):
         return self.config
@@ -510,6 +588,8 @@ class OviFusionEngine:
         decoded_video = None
         decoded_audio = None
         video_vae = None
+        keep_video_on_device = False
+        keep_audio_on_device = False
 
         try:
             if audio_latents is not None:
@@ -522,6 +602,10 @@ class OviFusionEngine:
                     audio_tensor = audio_tensor.to(self.device)
                 self._check_cancel()
                 if self.cpu_offload:
+                    keep_audio_on_device = self._should_keep_module_on_device(
+                        self._audio_vae_size_bytes,
+                        _AUTO_KEEP_AUDIO_MARGIN_BYTES,
+                    )
                     self.vae_model_audio = self.vae_model_audio.to(self.device)
                 audio_latents_for_vae = audio_tensor.unsqueeze(0).transpose(1, 2)  # 1, c, l
                 decoded_audio = (
@@ -542,6 +626,10 @@ class OviFusionEngine:
                     video_tensor = video_tensor.to(self.device)
                 self._check_cancel()
                 if self.cpu_offload:
+                    keep_video_on_device = self._should_keep_module_on_device(
+                        self._video_vae_size_bytes,
+                        _AUTO_KEEP_VIDEO_MARGIN_BYTES,
+                    )
                     video_vae = self._set_video_vae_device(self.device)
                 else:
                     video_vae = self._require_video_vae()
@@ -555,9 +643,9 @@ class OviFusionEngine:
 
         finally:
             if self.cpu_offload:
-                if audio_latents is not None:
+                if audio_latents is not None and not keep_audio_on_device:
                     self.vae_model_audio = self.vae_model_audio.to("cpu")
-                if video_latents is not None and video_vae is not None:
+                if video_latents is not None and video_vae is not None and not keep_video_on_device:
                     self._set_video_vae_device("cpu")
 
         return decoded_video, decoded_audio

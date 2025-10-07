@@ -15,10 +15,19 @@ CONFIG_ROOT = Path(__file__).resolve().parent.parent / "configs"
 
 def init_wan_vae_2_2(ckpt_dir, rank=0):
     device = rank
+    device_index = 0
+    if isinstance(device, int):
+        device_index = device
+    elif isinstance(device, str) and device.startswith("cuda:"):
+        try:
+            device_index = int(device.split(":", 1)[1])
+        except (ValueError, IndexError):
+            device_index = 0
+
     if torch.cuda.is_available():
         try:
-            if hasattr(torch.cuda, "device_count") and torch.cuda.device_count() > 0:
-                torch.cuda.set_device(device)
+            if hasattr(torch.cuda, "device_count") and device_index < torch.cuda.device_count():
+                torch.cuda.set_device(device_index)
             supports_bf16 = hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
         except Exception:
             supports_bf16 = False

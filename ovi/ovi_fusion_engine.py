@@ -218,7 +218,10 @@ class OviFusionEngine:
     def _set_video_vae_device(self, device: str):
         video_vae = self._require_video_vae()
         if hasattr(video_vae, "model"):
-            video_vae.model = video_vae.model.to(device=device, dtype=torch.bfloat16).eval()
+            target_dtype = getattr(video_vae, "dtype", self.target_dtype)
+            if device == "cpu":
+                target_dtype = torch.float32
+            video_vae.model = video_vae.model.to(device=device, dtype=target_dtype).eval()
             if device == "cpu":
                 try:
                     self.offload_to_cpu(video_vae.model)

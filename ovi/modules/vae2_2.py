@@ -907,9 +907,20 @@ class Wan2_2_VAE:
         vae_pth=None,
         dim_mult=[1, 2, 4, 4],
         temperal_downsample=[False, True, True],
-        dtype=torch.float,
+        dtype: "torch.dtype | None" = None,
         device="cuda",
     ):
+
+        if dtype is None:
+            dtype = torch.float32
+            if torch.cuda.is_available():
+                try:
+                    if hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported():
+                        dtype = torch.bfloat16
+                    else:
+                        dtype = torch.float16
+                except Exception:
+                    dtype = torch.float32
 
         self.dtype = dtype
         self.device = device
@@ -1079,7 +1090,7 @@ class Wan2_2_VAE:
         self,
         latents: torch.Tensor,
         device=None,
-        normalize: bool = True,
+        normalize: bool = False,
         return_cpu: bool = False,
         dtype: "torch.dtype | None" = torch.float32,
     ) -> torch.Tensor:
@@ -1096,8 +1107,14 @@ class Wan2_2_VAE:
             decoded = self.model.decode(tensor, self.scale).float()
 
         if normalize:
-            decoded = decoded.clamp_(-1, 1)
-            decoded = ((decoded + 1.0) * 0.5).clamp_(0.0, 1.0)
+            vmin = decoded.amin()
+            vmax = decoded.amax()
+            if (vmin < -1.01) or (vmax > 1.01):
+                span = (vmax - vmin).clamp(min=1e-8)
+                decoded = (decoded - vmin) / span
+            else:
+                decoded = ((decoded + 1.0) * 0.5).clamp_(0.0, 1.0)
+            decoded = decoded.clamp_(0.0, 1.0)
 
         if dtype is not None:
             decoded = decoded.to(dtype)

@@ -14,11 +14,28 @@ CONFIG_ROOT = Path(__file__).resolve().parent.parent / "configs"
 
 
 def init_wan_vae_2_2(ckpt_dir, rank=0):
-    vae_config = {}
-    vae_config['device'] = rank
-    vae_pth = os.path.join(ckpt_dir, "Wan2.2-TI2V-5B/Wan2.2_VAE.pth")
-    vae_config['vae_pth'] = vae_pth
-    vae_model = Wan2_2_VAE(**vae_config)
+    device = rank
+    if torch.cuda.is_available():
+        try:
+            if hasattr(torch.cuda, "device_count") and torch.cuda.device_count() > 0:
+                torch.cuda.set_device(device)
+            supports_bf16 = hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
+        except Exception:
+            supports_bf16 = False
+    else:
+        supports_bf16 = False
+
+    dtype = torch.bfloat16 if supports_bf16 else torch.float16
+    if not torch.cuda.is_available():
+        dtype = torch.float32
+
+    vae_model = Wan2_2_VAE(
+        z_dim=48,
+        c_dim=160,
+        vae_pth=os.path.join(ckpt_dir, "Wan2.2-TI2V-5B/Wan2.2_VAE.pth"),
+        dtype=dtype,
+        device=device,
+    )
 
     return vae_model
 

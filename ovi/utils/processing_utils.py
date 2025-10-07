@@ -88,7 +88,7 @@ def preprocess_image_tensor(image_path, device, target_dtype, h_w_multiple_of=32
             align_corners=False
         )
 
-    return image_tensor
+    return image_tensor.to(device, dtype=target_dtype)
 
 def preprocess_audio_tensor(audio, device):
     """Preprocess audio data into standardized tensor format."""

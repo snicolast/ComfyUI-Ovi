@@ -28,7 +28,7 @@ Custom nodes that bring Character.AI's **Ovi** video+audio generator to ComfyUI 
 
 ```bash
 # from ComfyUI/custom_nodes
-git clone https://github.com/your-org/ComfyUI-Ovi.git
+git clone https://github.com/snicolast/ComfyUI-Ovi.git
 cd ComfyUI-Ovi
 pip install -r requirements.txt
 ```

@@ -9,8 +9,6 @@ from PIL import Image
 
 from ovi.ovi_fusion_engine import OviFusionEngine
 
-DEFAULT_SAMPLE_RATE = 16000
-
 
 def _tensor_to_pil(image: torch.Tensor) -> Image.Image:
     """Convert a ComfyUI IMAGE tensor (B, H, W, C) in [0,1] to a PIL RGB image."""
@@ -23,21 +21,6 @@ def _tensor_to_pil(image: torch.Tensor) -> Image.Image:
     image = image.detach().cpu().clamp(0.0, 1.0)
     array = (image.numpy() * 255.0).astype(np.uint8)
     return Image.fromarray(array)
-
-
-def _video_to_tensor(video_numpy: np.ndarray) -> torch.Tensor:
-    """Convert (C, F, H, W) array in [-1,1] to (F, H, W, C) tensor in [0,1]."""
-    tensor = torch.from_numpy(video_numpy).float()
-    tensor = tensor.permute(1, 2, 3, 0)  # F, H, W, C
-    tensor = ((tensor + 1.0) * 0.5).clamp(0.0, 1.0)
-    return tensor
-
-
-def _audio_to_comfy(audio_numpy: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE) -> dict:
-    """Convert numpy audio array to ComfyUI AUDIO dict."""
-    waveform = torch.from_numpy(audio_numpy).float().flatten()
-    waveform = waveform.unsqueeze(0).unsqueeze(0)  # [B=1, C=1, T]
-    return {"waveform": waveform, "sample_rate": int(sample_rate)}
 
 
 class OviVideoGenerator:
@@ -64,8 +47,8 @@ class OviVideoGenerator:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO")
-    RETURN_NAMES = ("images", "audio")
+    RETURN_TYPES = ("OVI_VIDEO_LATENTS", "OVI_AUDIO_LATENTS", "OVI_ENGINE")
+    RETURN_NAMES = ("video_latents", "audio_latents", "components")
     FUNCTION = "generate"
     CATEGORY = "Ovi"
 
@@ -108,8 +91,8 @@ class OviVideoGenerator:
         if result is None:
             raise RuntimeError("OVI generation failed. Check console logs for details.")
 
-        video_numpy, audio_numpy, _ = result
-        video_tensor = _video_to_tensor(video_numpy)
-        audio_dict = _audio_to_comfy(audio_numpy, DEFAULT_SAMPLE_RATE)
+        video_latents, audio_latents = result
+        if not isinstance(video_latents, torch.Tensor) or not isinstance(audio_latents, torch.Tensor):
+            raise RuntimeError("OVI engine returned invalid latents. Check console logs for details.")
 
-        return (video_tensor, audio_dict)
+        return (video_latents.detach(), audio_latents.detach(), components)

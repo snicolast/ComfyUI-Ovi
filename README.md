@@ -70,8 +70,9 @@ ComfyUI/
 | --- | --- |
 | **Ovi Engine Loader** | Downloads missing weights, builds the fusion engine, exposes `OVI_ENGINE`, lets you pick precision/offload/device (multi-GPU ready). |
 | **Ovi Wan Component Loader** | Optional override so you can point the engine to Wan VAE + UMT5 files stored elsewhere. |
-| **Ovi Attention Selector** | Switch attention backend for the live engine (`auto`, FlashAttention, SDPA, xFormers, native…). |
-| **Ovi Video Generator** | Runs `OviFusionEngine.generate` and returns `IMAGE` frames plus an `AUDIO` waveform (16 kHz). |
+| **Ovi Attention Selector** | Switch attention backend for the live engine (`auto`, FlashAttention, SDPA, xFormers, native, etc.). |
+| **Ovi Video Generator** | Runs `OviFusionEngine.generate` and emits video/audio latents plus the engine handle for downstream nodes. |
+| **Ovi Latent Decoder** | Takes those latents + engine, performs the VAE decode, and outputs `IMAGE` frames with accompanying `AUDIO` (16 kHz). |
 
 All nodes live under the **Ovi** category in the ComfyUI search dialog.
 
@@ -79,11 +80,12 @@ All nodes live under the **Ovi** category in the ComfyUI search dialog.
 
 ## Quick Start Workflow
 
-1. **Load engine** – drop *Ovi Engine Loader*, choose precision (BF16 vs FP8), enable CPU offload if you are on a 24 GB GPU, select device.
-2. **(Optional) Add Wan components** – connect *Ovi Wan Component Loader* if your VAE/encoder live outside the default folders.
-3. **Tune attention** – insert *Ovi Attention Selector* to lock a backend, otherwise leave on `auto`.
-4. **Generate** – wire the engine into *Ovi Video Generator*, enter your prompt (supports `<S>…<E>` speech and `<AUDCAP>…<ENDAUDCAP>` audio tags), optionally feed a first-frame image.
-5. **Export** – connect the resulting `IMAGE` tensor sequence and `AUDIO` dict to your preferred save nodes.
+1. **Load engine** - drop *Ovi Engine Loader*, choose precision (BF16 vs FP8), enable CPU offload if you are on a 24 GB GPU, select device.
+2. **(Optional) Add Wan components** - connect *Ovi Wan Component Loader* if your VAE/encoder live outside the default folders.
+3. **Tune attention** - insert *Ovi Attention Selector* to lock a backend, otherwise leave on `auto`.
+4. **Generate** - wire the engine into *Ovi Video Generator*, enter your prompt (supports `<S>`...`<E>` speech and `<AUDCAP>`...`<ENDAUDCAP>` audio tags), optionally feed a first-frame image.
+5. **Decode** - add *Ovi Latent Decoder*, feed it the engine passthrough plus both latents to obtain `IMAGE` + `AUDIO`.
+6. **Export** - connect those outputs to your preferred save nodes.
 
 ---
 

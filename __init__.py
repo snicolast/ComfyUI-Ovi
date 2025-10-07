@@ -11,12 +11,15 @@ from .nodes.ovi_engine_loader import OviEngineLoader
 from .nodes.ovi_video_generator import OviVideoGenerator
 from .nodes.ovi_attention_selector import OviAttentionSelector
 from .nodes.ovi_wan_component_loader import OviWanComponentLoader
+from .nodes.ovi_latent_decoder import OviLatentDecoder
+
 
 NODE_CLASS_MAPPINGS = {
     "OviEngineLoader": OviEngineLoader,
     "OviVideoGenerator": OviVideoGenerator,
     "OviAttentionSelector": OviAttentionSelector,
     "OviWanComponentLoader": OviWanComponentLoader,
+    "OviLatentDecoder": OviLatentDecoder,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -24,4 +27,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "OviVideoGenerator": "OVI Video Generator",
     "OviAttentionSelector": "OVI Attention Selector",
     "OviWanComponentLoader": "OVI Wan Component Loader",
+    "OviLatentDecoder": "OVI Latent Decoder",
 }

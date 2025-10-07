@@ -352,7 +352,6 @@ class OviFusionEngine:
             )
 
             first_frame = None
-            image = None
             is_i2v = False
 
             if image_path is not None:
@@ -366,14 +365,14 @@ class OviFusionEngine:
                 image_model = getattr(self, 'image_model', None)
                 if image_model is not None:
                     image_h, image_w = scale_hw_to_area_divisible(video_h, video_w, area = 1024 * 1024)
-                    image = image_model(
+                    generated_frame = image_model(
                         clean_text(text_prompt),
                         height=image_h,
                         width=image_w,
                         guidance_scale=4.5,
                         generator=torch.Generator().manual_seed(seed),
                     ).images[0]
-                    first_frame = preprocess_image_tensor(image, self.device, self.target_dtype)
+                    first_frame = preprocess_image_tensor(generated_frame, self.device, self.target_dtype)
                     is_i2v = first_frame is not None
                 else:
                     print(f"Pure T2V mode: calculated video latent size: {video_latent_h} x {video_latent_w}")
@@ -475,35 +474,90 @@ class OviFusionEngine:
 
                 if self.cpu_offload:
                     self.offload_to_cpu(self.model)
-                
-                if is_i2v:
-                    video_noise[:, :1] = latents_images
 
-                # Decode audio
-                audio_latents_for_vae = audio_noise.unsqueeze(0).transpose(1, 2)  # 1, c, l
-                self._check_cancel()
-                if self.cpu_offload:
-                    self.vae_model_audio = self.vae_model_audio.to(self.device)
-                generated_audio = self.vae_model_audio.wrapped_decode(audio_latents_for_vae)
-                generated_audio = generated_audio.squeeze().cpu().float().numpy()
-                
-                # Decode video  
-                video_latents_for_vae = video_noise.unsqueeze(0)  # 1, c, f, h, w
-                self._check_cancel()
-                video_vae = self._set_video_vae_device(self.device) if self.cpu_offload else self._require_video_vae()
-                generated_video = video_vae.wrapped_decode(video_latents_for_vae)
-                generated_video = generated_video.squeeze(0).cpu().float().numpy()  # c, f, h, w
-                if self.cpu_offload:
-                    self._set_video_vae_device("cpu")
-                    self.vae_model_audio = self.vae_model_audio.to("cpu")
-            
-            return generated_video, generated_audio, image
+            if is_i2v:
+                video_noise[:, :1] = latents_images
+
+            video_latents = video_noise.detach()
+            audio_latents = audio_noise.detach()
+
+            if self.cpu_offload:
+                video_latents = video_latents.to("cpu")
+                audio_latents = audio_latents.to("cpu")
+
+            return video_latents, audio_latents
 
 
         except Exception as e:
             logging.error(traceback.format_exc())
             return None
-            
+
+    @torch.inference_mode()
+    def decode_latents(
+        self,
+        video_latents: torch.Tensor | None = None,
+        audio_latents: torch.Tensor | None = None,
+    ):
+        if video_latents is None and audio_latents is None:
+            raise ValueError("At least one of video_latents or audio_latents must be provided.")
+
+        self.ensure_loaded()
+
+        decoded_video = None
+        decoded_audio = None
+        video_vae = None
+
+        try:
+            if audio_latents is not None:
+                if not isinstance(audio_latents, torch.Tensor):
+                    raise TypeError("audio_latents must be a torch.Tensor.")
+                audio_tensor = audio_latents.to(self.target_dtype)
+                if audio_tensor.dim() != 2:
+                    raise ValueError("audio_latents must have shape [length, channels].")
+                if audio_tensor.device != self.device:
+                    audio_tensor = audio_tensor.to(self.device)
+                self._check_cancel()
+                if self.cpu_offload:
+                    self.vae_model_audio = self.vae_model_audio.to(self.device)
+                audio_latents_for_vae = audio_tensor.unsqueeze(0).transpose(1, 2)  # 1, c, l
+                decoded_audio = (
+                    self.vae_model_audio.wrapped_decode(audio_latents_for_vae)
+                    .squeeze()
+                    .cpu()
+                    .float()
+                    .numpy()
+                )
+
+            if video_latents is not None:
+                if not isinstance(video_latents, torch.Tensor):
+                    raise TypeError("video_latents must be a torch.Tensor.")
+                video_tensor = video_latents.to(self.target_dtype)
+                if video_tensor.dim() != 4:
+                    raise ValueError("video_latents must have shape [channels, frames, height, width].")
+                if video_tensor.device != self.device:
+                    video_tensor = video_tensor.to(self.device)
+                self._check_cancel()
+                if self.cpu_offload:
+                    video_vae = self._set_video_vae_device(self.device)
+                else:
+                    video_vae = self._require_video_vae()
+                decoded_video = (
+                    video_vae.wrapped_decode(video_tensor.unsqueeze(0))
+                    .squeeze(0)
+                    .cpu()
+                    .float()
+                    .numpy()
+                )
+
+        finally:
+            if self.cpu_offload:
+                if audio_latents is not None:
+                    self.vae_model_audio = self.vae_model_audio.to("cpu")
+                if video_latents is not None and video_vae is not None:
+                    self._set_video_vae_device("cpu")
+
+        return decoded_video, decoded_audio
+
     def offload_to_cpu(self, model):
         model = model.cpu()
         torch.cuda.synchronize()

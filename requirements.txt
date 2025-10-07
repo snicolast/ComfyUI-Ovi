@@ -17,3 +17,4 @@ open-clip-torch
 protobuf
 sentencepiece
 huggingface_hub>=0.25.0
+pydub>=0.25.1

@@ -39,18 +39,19 @@ class OviWanComponentLoader:
         vae_path = Path(folder_paths.get_full_path_or_raise('vae', vae_file)).resolve()
         umt5_path = Path(folder_paths.get_full_path_or_raise('text_encoders', umt5_file)).resolve()
 
-        wan_vae = Wan2_2_VAE(device=engine.device, vae_pth=str(vae_path))
+        wan_device = engine.device if not getattr(engine, "cpu_offload", False) else 'cpu'
+        wan_vae = Wan2_2_VAE(device=wan_device, vae_pth=str(vae_path))
         wan_vae.model.requires_grad_(False).eval()
-        wan_vae.model = wan_vae.model.to(dtype=torch.bfloat16)
 
         tokenizer_path = Path(engine.get_config().ckpt_dir) / 'google' / 'umt5-xxl'
         if not tokenizer_path.exists():
             raise FileNotFoundError(f'Wan tokenizer not found at {tokenizer_path}. Run OviEngineLoader with auto_download or place it manually.')
 
+        text_device = engine.device if not getattr(engine, "cpu_offload", False) else 'cpu'
         text_encoder = T5EncoderModel(
             text_len=512,
             dtype=torch.bfloat16,
-            device=engine.device,
+            device=text_device,
             checkpoint_path=str(umt5_path),
             tokenizer_path=str(tokenizer_path),
             shard_fn=None,

@@ -100,5 +100,3 @@ All nodes live under the **Ovi** category in the ComfyUI search dialog.
 
 - *Ovi: Twin Backbone Cross-Modal Fusion for Audio-Video Generation* (Character.AI)
 - Wan 2.2 VAE, MMAudio, UMT5 ecosystem maintainers
-- RunningHub’s ComfyUI prototype for the original integration ideas
-

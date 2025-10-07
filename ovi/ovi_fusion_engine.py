@@ -497,6 +497,7 @@ class OviFusionEngine:
         self,
         video_latents: torch.Tensor | None = None,
         audio_latents: torch.Tensor | None = None,
+        to_cpu: bool = True,
     ):
         if video_latents is None and audio_latents is None:
             raise ValueError("At least one of video_latents or audio_latents must be provided.")
@@ -523,10 +524,10 @@ class OviFusionEngine:
                 decoded_audio = (
                     self.vae_model_audio.wrapped_decode(audio_latents_for_vae)
                     .squeeze()
-                    .cpu()
-                    .float()
-                    .numpy()
+                    .to(torch.float32)
                 )
+                if to_cpu:
+                    decoded_audio = decoded_audio.cpu()
 
             if video_latents is not None:
                 if not isinstance(video_latents, torch.Tensor):
@@ -541,12 +542,12 @@ class OviFusionEngine:
                     video_vae = self._set_video_vae_device(self.device)
                 else:
                     video_vae = self._require_video_vae()
-                decoded_video = (
-                    video_vae.wrapped_decode(video_tensor.unsqueeze(0))
-                    .squeeze(0)
-                    .cpu()
-                    .float()
-                    .numpy()
+                decoded_video = video_vae.decode_latents(
+                    video_tensor,
+                    device=self.device,
+                    normalize=True,
+                    return_cpu=to_cpu,
+                    dtype=torch.float32,
                 )
 
         finally:

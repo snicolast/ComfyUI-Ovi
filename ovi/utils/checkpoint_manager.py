@@ -149,6 +149,26 @@ def _missing_files(base_dir: Path, relative_files: Iterable[str]) -> list[Path]:
     return missing
 
 
+def _missing_patterns_locally(base_dir: Path, patterns: Iterable[str]) -> list[Path]:
+    """Check whether patterns already exist locally without hitting remote APIs."""
+    missing: list[Path] = []
+    for pattern in patterns:
+        normalized = pattern.replace("\\", "/").strip()
+        if not normalized:
+            continue
+        has_wildcard = any(ch in normalized for ch in "*?[")
+        if has_wildcard:
+            matches = list(base_dir.glob(normalized))
+            if matches:
+                continue
+            missing.append(base_dir / normalized)
+        else:
+            path = base_dir / normalized
+            if not path.exists():
+                missing.append(path)
+    return missing
+
+
 def _download_file(repo_id: str, relative_path: str, target_dir: Path) -> None:
     """Download file using hf CLI with progress bars, fallback to hf_hub_download."""
     # Try hf CLI first for progress bars
@@ -231,6 +251,29 @@ def ensure_checkpoints(
         target_dir = ckpt_path / job["subdir"]
         target_dir.mkdir(parents=True, exist_ok=True)
 
+        target_name = job.get("target_name")
+        source_name = job.get("source_name")
+
+        if target_name and source_name:
+            dest_file = DIFFUSION_MODELS_DIR / target_name
+            source_file = target_dir / source_name
+            if dest_file.exists():
+                continue
+            if source_file.exists():
+                DIFFUSION_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+                try:
+                    if dest_file.exists():
+                        dest_file.unlink()
+                except OSError:
+                    pass
+                shutil.move(str(source_file), str(dest_file))
+                continue
+
+        local_missing = _missing_patterns_locally(target_dir, job["patterns"])
+
+        if not local_missing and not (target_name and source_name):
+            continue
+
         remote_listing_failed = False
         try:
             required_paths = _expand_patterns(job["repo_id"], job["patterns"])
@@ -247,26 +290,11 @@ def ensure_checkpoints(
             logging.warning("No matching files resolved for %s", job["repo_id"])
             continue
 
-        target_name = job.get("target_name")
-        source_name = job.get("source_name")
-
         if target_name and source_name:
             dest_path = DIFFUSION_MODELS_DIR / target_name
             missing = [] if dest_path.exists() else [target_dir / source_name]
         elif remote_listing_failed:
-            missing = []
-            for pattern in required_paths:
-                normalized = pattern.replace("\\", "/").strip()
-                if not normalized:
-                    continue
-                if any(ch in normalized for ch in "*?["):
-                    matches = list(target_dir.glob(normalized))
-                    if not matches:
-                        missing.append(target_dir / normalized)
-                else:
-                    path = target_dir / normalized
-                    if not path.exists():
-                        missing.append(path)
+            missing = _missing_patterns_locally(target_dir, required_paths)
         else:
             missing = _missing_files(target_dir, required_paths)
 

@@ -1075,6 +1075,38 @@ class Wan2_2_VAE:
             logging.info(e)
             return None
         
+    def decode_latents(
+        self,
+        latents: torch.Tensor,
+        device=None,
+        normalize: bool = True,
+        return_cpu: bool = False,
+        dtype: "torch.dtype | None" = torch.float32,
+    ) -> torch.Tensor:
+        if not isinstance(latents, torch.Tensor):
+            raise TypeError("latents should be a torch.Tensor")
+        target_device = device or self.device
+        tensor = latents.to(target_device, dtype=self.dtype)
+        if tensor.ndim == 4:
+            tensor = tensor.unsqueeze(0)
+        elif tensor.ndim != 5:
+            raise ValueError("latents must have shape [C,F,H,W] or [B,C,F,H,W]")
+
+        with amp.autocast(dtype=self.dtype):
+            decoded = self.model.decode(tensor, self.scale).float()
+
+        if normalize:
+            decoded = decoded.clamp_(-1, 1)
+            decoded = ((decoded + 1.0) * 0.5).clamp_(0.0, 1.0)
+
+        if dtype is not None:
+            decoded = decoded.to(dtype)
+
+        if return_cpu:
+            decoded = decoded.cpu()
+
+        return decoded.squeeze(0)
+        
     def wrapped_encode(self, video):
         try:
             if not isinstance(video, torch.Tensor):

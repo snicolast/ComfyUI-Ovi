@@ -638,55 +638,97 @@ class OviFusionEngine:
             if video_latents is not None:
                 if not isinstance(video_latents, torch.Tensor):
                     raise TypeError("video_latents must be a torch.Tensor.")
-                video_tensor = video_latents.to(self.target_dtype)
-                if video_tensor.dim() != 4:
+                if video_latents.dim() != 4:
                     raise ValueError("video_latents must have shape [channels, frames, height, width].")
-                if video_tensor.device != self.device:
-                    video_tensor = video_tensor.to(self.device)
-                self._check_cancel()
-                print(
-                    "[OVI] decode_latents input -> "
-                    f"latents_device={getattr(video_latents, 'device', 'n/a')}/"
-                    f"{getattr(video_latents, 'dtype', 'n/a')}, "
-                    f"tensor_device={video_tensor.device}/{video_tensor.dtype}, "
-                    f"engine_device={self.device}, cpu_offload={self.cpu_offload}"
-                )
+
+                dtype_candidates: list[torch.dtype] = []
+                initial_dtype = getattr(self.vae_model_video, "dtype", None) or self.target_dtype or video_latents.dtype
+                for candidate in (initial_dtype, torch.float16, torch.float32):
+                    if candidate is None:
+                        continue
+                    if candidate not in dtype_candidates:
+                        dtype_candidates.append(candidate)
+
+                keep_video_on_device = False
                 if self.cpu_offload:
                     keep_video_on_device = self._should_keep_module_on_device(
                         self._video_vae_size_bytes,
                         _AUTO_KEEP_VIDEO_MARGIN_BYTES,
                     )
-                    video_vae = self._set_video_vae_device(self.device)
-                else:
-                    video_vae = self._require_video_vae()
-                if isinstance(getattr(video_vae, "scale", None), list):
-                    scale_dtype = getattr(video_vae, "dtype", video_tensor.dtype)
+                video_vae = self._require_video_vae()
+
+                decoded_video = None
+                last_decode_error: RuntimeError | None = None
+                original_target_dtype = self.target_dtype
+                original_video_vae_dtype = getattr(video_vae, "dtype", None)
+
+                for attempt_dtype in dtype_candidates:
+                    self._check_cancel()
                     try:
-                        video_vae.scale = [
-                            tensor.to(device=self.device, dtype=scale_dtype)
-                            if isinstance(tensor, torch.Tensor) else tensor
-                            for tensor in video_vae.scale
-                        ]
-                        scale_debug = [
-                            f"{idx}:{tensor.device}/{tensor.dtype}"
-                            if isinstance(tensor, torch.Tensor)
-                            else f"{idx}:{type(tensor).__name__}"
-                            for idx, tensor in enumerate(video_vae.scale)
-                        ]
+                        self.target_dtype = attempt_dtype
+                        if hasattr(video_vae, "dtype"):
+                            video_vae.dtype = attempt_dtype
+                        video_tensor = video_latents.to(attempt_dtype)
+                        if video_tensor.device != self.device:
+                            video_tensor = video_tensor.to(self.device)
                         print(
-                            f"[OVI] video VAE scale sync -> target={self.device}, "
-                            f"scale_dtype={scale_dtype}, entries={scale_debug}"
+                            "[OVI] decode_latents attempt -> "
+                            f"dtype={attempt_dtype}, "
+                            f"latents_device={getattr(video_latents, 'device', 'n/a')}/{getattr(video_latents, 'dtype', 'n/a')}, "
+                            f"tensor_device={video_tensor.device}/{video_tensor.dtype}, "
+                            f"engine_device={self.device}, cpu_offload={self.cpu_offload}"
                         )
-                    except Exception as exc:
-                        logging.warning("OVI failed to move video VAE scale tensors to %s: %s", self.device, exc)
-                decoded_video = video_vae.decode_latents(
-                    video_tensor,
-                    device=self.device,
-                    normalize=True,
-                    return_cpu=to_cpu,
-                    dtype=torch.float32,
-                    pbar=ProgressBar(video_tensor.shape[1]) if to_cpu else None,
-                )
+                        video_vae = self._set_video_vae_device(self.device)
+                        if isinstance(getattr(video_vae, "scale", None), list):
+                            scale_dtype = getattr(video_vae, "dtype", attempt_dtype)
+                            try:
+                                video_vae.scale = [
+                                    tensor.to(device=self.device, dtype=scale_dtype)
+                                    if isinstance(tensor, torch.Tensor) else tensor
+                                    for tensor in video_vae.scale
+                                ]
+                                scale_debug = [
+                                    f"{idx}:{tensor.device}/{tensor.dtype}"
+                                    if isinstance(tensor, torch.Tensor)
+                                    else f"{idx}:{type(tensor).__name__}"
+                                    for idx, tensor in enumerate(video_vae.scale)
+                                ]
+                                print(
+                                    f"[OVI] video VAE scale sync -> target={self.device}, "
+                                    f"scale_dtype={scale_dtype}, entries={scale_debug}"
+                                )
+                            except Exception as exc:
+                                logging.warning("OVI failed to move video VAE scale tensors to %s: %s", self.device, exc)
+                        decoded_video = video_vae.decode_latents(
+                            video_tensor,
+                            device=self.device,
+                            normalize=True,
+                            return_cpu=to_cpu,
+                            dtype=torch.float32,
+                            pbar=ProgressBar(video_tensor.shape[1]) if to_cpu else None,
+                        )
+                        break
+                    except RuntimeError as exc:
+                        if "slow_conv3d_forward" in str(exc) and attempt_dtype != torch.float32:
+                            logging.warning(
+                                "OVI video decode failed for dtype %s (slow_conv3d_forward); retrying with fallback. Error: %s",
+                                attempt_dtype,
+                                exc,
+                            )
+                            last_decode_error = exc
+                            continue
+                        self.target_dtype = original_target_dtype
+                        if hasattr(video_vae, "dtype"):
+                            video_vae.dtype = original_video_vae_dtype
+                        raise
+
+                if decoded_video is None:
+                    self.target_dtype = original_target_dtype
+                    if hasattr(video_vae, "dtype"):
+                        video_vae.dtype = original_video_vae_dtype
+                    if last_decode_error is not None:
+                        raise last_decode_error
+                    raise RuntimeError("OVI video decode failed: no dtype fallback succeeded.")
 
         finally:
             if self.cpu_offload:
@@ -741,4 +783,3 @@ class OviFusionEngine:
             raise NotImplementedError("Unsupported solver.")
         
         return sample_scheduler, timesteps
-

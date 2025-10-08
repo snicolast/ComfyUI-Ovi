@@ -44,9 +44,11 @@ Handled automatically by **Ovi Engine Loader**:
 - `MMAudio/ext_weights/{best_netG.pt, v1-16.pth}`
 - `Ovi-11B-bf16.safetensors` or `Ovi-11B-fp8.safetensors` (renamed and parked in `models/diffusion_models/`)
 
-Provide manually if missing (usually already present in Wan setups):
+Provide manually if missing (usually already present in Wan setups). Choose only one text encoder:
 
-- [`umt5-xxl-enc-bf16.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-bf16.safetensors) → `models/text_encoders`
+- BF16 (>32 GB VRAM) -> [`umt5-xxl-enc-bf16.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-bf16.safetensors) → `models/text_encoders`
+- FP8 (24 GB VRAM) -> [`umt5-xxl-enc-fp8_e4m3fn.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-fp8_e4m3fn.safetensors) → `models/text_encoders`
+
 - [`wan2.2_vae.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/main/split_files/vae/wan2.2_vae.safetensors) → `models/vae`
 
 Directory sketch:
@@ -102,3 +104,4 @@ All nodes live under the **Ovi** category in the ComfyUI search dialog.
 
 - *Ovi: Twin Backbone Cross-Modal Fusion for Audio-Video Generation* (Character.AI)
 - Wan 2.2 VAE, MMAudio, UMT5 ecosystem maintainers
+- Kijai

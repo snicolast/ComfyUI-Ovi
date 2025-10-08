@@ -660,12 +660,15 @@ class OviFusionEngine:
                             if isinstance(tensor, torch.Tensor) else tensor
                             for tensor in video_vae.scale
                         ]
-                        logging.info(
-                            "OVI video VAE scale devices after sync: %s",
-                            [
-                                tensor.device if isinstance(tensor, torch.Tensor) else tensor
-                                for tensor in video_vae.scale
-                            ],
+                        scale_debug = [
+                            f"{idx}:{tensor.device}/{tensor.dtype}"
+                            if isinstance(tensor, torch.Tensor)
+                            else f"{idx}:{type(tensor).__name__}"
+                            for idx, tensor in enumerate(video_vae.scale)
+                        ]
+                        print(
+                            f"[OVI] video VAE scale sync -> target={self.device}, "
+                            f"scale_dtype={scale_dtype}, entries={scale_debug}"
                         )
                     except Exception as exc:
                         logging.warning("OVI failed to move video VAE scale tensors to %s: %s", self.device, exc)

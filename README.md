@@ -48,7 +48,6 @@ Provide manually if missing (usually already present in Wan setups). Choose only
 
 - BF16 (>32 GB VRAM) -> [`umt5-xxl-enc-bf16.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-bf16.safetensors) → `models/text_encoders`
 - FP8 (24 GB VRAM) -> [`umt5-xxl-enc-fp8_e4m3fn.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-fp8_e4m3fn.safetensors) → `models/text_encoders`
-
 - [`wan2.2_vae.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/main/split_files/vae/wan2.2_vae.safetensors) → `models/vae`
 
 Directory sketch:

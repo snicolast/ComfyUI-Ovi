@@ -313,11 +313,14 @@ class OviFusionEngine:
                 except Exception:
                     pass
         if isinstance(getattr(video_vae, "scale", None), list):
-            video_vae.scale = [
-                tensor.to(device, dtype=torch.bfloat16)
-                if isinstance(tensor, torch.Tensor) else tensor
-                for tensor in video_vae.scale
-            ]
+            scale_dtype = torch.float32 if device == "cpu" else getattr(video_vae, "dtype", None)
+            def _move_scale_tensor(tensor):
+                if not isinstance(tensor, torch.Tensor):
+                    return tensor
+                if scale_dtype is not None:
+                    return tensor.to(device=device, dtype=scale_dtype)
+                return tensor.to(device=device)
+            video_vae.scale = [_move_scale_tensor(tensor) for tensor in video_vae.scale]
         return video_vae
 
     def _require_video_vae(self):

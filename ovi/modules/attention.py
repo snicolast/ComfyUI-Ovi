@@ -269,20 +269,43 @@ def _flash_attn_backend(
             outputs = outputs[0]
         x = outputs.unflatten(0, (b, lq))
     else:
-        x = flash_attn.flash_attn_varlen_func(  # type: ignore[attr-defined]
-            q=q_flat,
-            k=k_flat,
-            v=v_flat,
-            cu_seqlens_q=cu_q,
-            cu_seqlens_k=cu_k,
-            max_seqlen_q=lq,
-            max_seqlen_k=lk,
-            dropout_p=dropout_p,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            window_size=window_size,
-            deterministic=deterministic,
-        ).unflatten(0, (b, lq))
+        try:
+            outputs = flash_attn.flash_attn_varlen_func(  # type: ignore[attr-defined]
+                q=q_flat,
+                k=k_flat,
+                v=v_flat,
+                cu_seqlens_q=cu_q,
+                cu_seqlens_k=cu_k,
+                max_seqlen_q=lq,
+                max_seqlen_k=lk,
+                dropout_p=dropout_p,
+                softmax_scale=softmax_scale,
+                causal=causal,
+                window_size=window_size,
+                deterministic=deterministic,
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            if "cu_seqlens" in message or "dtype int32" in message:
+                warnings.warn(
+                    "FlashAttention varlen kernels rejected the sequence lengths; falling back to SDPA backend.",
+                    RuntimeWarning,
+                )
+                return _sdpa_attention(
+                    q,
+                    k,
+                    v,
+                    q_lens,
+                    k_lens,
+                    dropout_p,
+                    softmax_scale,
+                    q_scale,
+                    causal,
+                    window_size,
+                    deterministic,
+                )
+            raise
+        x = outputs.unflatten(0, (b, lq))
 
     return x.to(out_dtype)
 

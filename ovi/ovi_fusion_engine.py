@@ -652,6 +652,23 @@ class OviFusionEngine:
                     video_vae = self._set_video_vae_device(self.device)
                 else:
                     video_vae = self._require_video_vae()
+                if isinstance(getattr(video_vae, "scale", None), list):
+                    scale_dtype = getattr(video_vae, "dtype", video_tensor.dtype)
+                    try:
+                        video_vae.scale = [
+                            tensor.to(device=self.device, dtype=scale_dtype)
+                            if isinstance(tensor, torch.Tensor) else tensor
+                            for tensor in video_vae.scale
+                        ]
+                        logging.info(
+                            "OVI video VAE scale devices after sync: %s",
+                            [
+                                tensor.device if isinstance(tensor, torch.Tensor) else tensor
+                                for tensor in video_vae.scale
+                            ],
+                        )
+                    except Exception as exc:
+                        logging.warning("OVI failed to move video VAE scale tensors to %s: %s", self.device, exc)
                 decoded_video = video_vae.decode_latents(
                     video_tensor,
                     device=self.device,

@@ -500,8 +500,12 @@ class OviFusionEngine:
             # Sampling loop
             if self.cpu_offload:
                 self.model = self.model.to(self.device)
+            ui_progress = ProgressBar(len(timesteps_video)) if 'ProgressBar' in globals() and ProgressBar is not None else None
+            pair_iterator = zip(timesteps_video, timesteps_audio)
+            if 'tqdm' in globals() and tqdm is not None:
+                pair_iterator = tqdm(pair_iterator, total=len(timesteps_video))
             with torch.amp.autocast('cuda', enabled=self.target_dtype != torch.float32, dtype=self.target_dtype):
-                for i, (t_v, t_a) in tqdm(enumerate(zip(timesteps_video, timesteps_audio))):
+                for step_index, (t_v, t_a) in enumerate(pair_iterator):
                     self._check_cancel()
                     timestep_input = torch.full((1,), t_v, device=self.device)
 
@@ -554,8 +558,13 @@ class OviFusionEngine:
                         pred_audio_guided.unsqueeze(0), t_a, audio_noise.unsqueeze(0), return_dict=False
                     )[0].squeeze(0)
 
-                if self.cpu_offload:
-                    self.offload_to_cpu(self.model)
+                    if ui_progress is not None:
+                        ui_progress.update(1)
+
+            if self.cpu_offload:
+                self.offload_to_cpu(self.model)
+            if ui_progress is not None and hasattr(ui_progress, "update_absolute"):
+                ui_progress.update_absolute(0)
 
             if is_i2v:
                 video_noise[:, :1] = latents_images

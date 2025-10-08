@@ -644,6 +644,13 @@ class OviFusionEngine:
                 if video_tensor.device != self.device:
                     video_tensor = video_tensor.to(self.device)
                 self._check_cancel()
+                print(
+                    "[OVI] decode_latents input -> "
+                    f"latents_device={getattr(video_latents, 'device', 'n/a')}/"
+                    f"{getattr(video_latents, 'dtype', 'n/a')}, "
+                    f"tensor_device={video_tensor.device}/{video_tensor.dtype}, "
+                    f"engine_device={self.device}, cpu_offload={self.cpu_offload}"
+                )
                 if self.cpu_offload:
                     keep_video_on_device = self._should_keep_module_on_device(
                         self._video_vae_size_bytes,

@@ -312,15 +312,18 @@ class OviFusionEngine:
                     self.offload_to_cpu(video_vae.model)
                 except Exception:
                     pass
-        if isinstance(getattr(video_vae, "scale", None), list):
+        scale = getattr(video_vae, "scale", None)
+        if isinstance(scale, (list, tuple)):
             scale_dtype = torch.float32 if device == "cpu" else getattr(video_vae, "dtype", None)
-            def _move_scale_tensor(tensor):
-                if not isinstance(tensor, torch.Tensor):
-                    return tensor
-                if scale_dtype is not None:
-                    return tensor.to(device=device, dtype=scale_dtype)
-                return tensor.to(device=device)
-            video_vae.scale = [_move_scale_tensor(tensor) for tensor in video_vae.scale]
+            def _move_scale_tensor(value):
+                if isinstance(value, torch.Tensor):
+                    return value.to(device=device, dtype=scale_dtype) if scale_dtype is not None else value.to(device=device)
+                try:
+                    return torch.as_tensor(value, device=device, dtype=scale_dtype if scale_dtype is not None else None)
+                except Exception:
+                    return value
+            moved = [_move_scale_tensor(value) for value in scale]
+            video_vae.scale = type(scale)(moved)
         return video_vae
 
     def _require_video_vae(self):
@@ -679,26 +682,28 @@ class OviFusionEngine:
                             f"engine_device={self.device}, cpu_offload={self.cpu_offload}"
                         )
                         video_vae = self._set_video_vae_device(self.device)
-                        if isinstance(getattr(video_vae, "scale", None), list):
+                        scale = getattr(video_vae, "scale", None)
+                        if isinstance(scale, (list, tuple)):
                             scale_dtype = getattr(video_vae, "dtype", attempt_dtype)
-                            try:
-                                video_vae.scale = [
-                                    tensor.to(device=self.device, dtype=scale_dtype)
-                                    if isinstance(tensor, torch.Tensor) else tensor
-                                    for tensor in video_vae.scale
-                                ]
-                                scale_debug = [
-                                    f"{idx}:{tensor.device}/{tensor.dtype}"
-                                    if isinstance(tensor, torch.Tensor)
-                                    else f"{idx}:{type(tensor).__name__}"
-                                    for idx, tensor in enumerate(video_vae.scale)
-                                ]
-                                print(
-                                    f"[OVI] video VAE scale sync -> target={self.device}, "
-                                    f"scale_dtype={scale_dtype}, entries={scale_debug}"
-                                )
-                            except Exception as exc:
-                                logging.warning("OVI failed to move video VAE scale tensors to %s: %s", self.device, exc)
+                            def _to_tensor(value):
+                                if isinstance(value, torch.Tensor):
+                                    return value.to(device=self.device, dtype=scale_dtype)
+                                try:
+                                    return torch.as_tensor(value, device=self.device, dtype=scale_dtype)
+                                except Exception:
+                                    return value
+                            moved = [_to_tensor(value) for value in scale]
+                            video_vae.scale = type(scale)(moved)
+                            scale_debug = []
+                            for idx, value in enumerate(video_vae.scale):
+                                if isinstance(value, torch.Tensor):
+                                    scale_debug.append(f"{idx}:{value.device}/{value.dtype}")
+                                else:
+                                    scale_debug.append(f"{idx}:{type(value).__name__}")
+                            print(
+                                f"[OVI] video VAE scale sync -> target={self.device}, "
+                                f"scale_dtype={scale_dtype}, entries={scale_debug}"
+                            )
                         decoded_video = video_vae.decode_latents(
                             video_tensor,
                             device=self.device,

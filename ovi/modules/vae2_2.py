@@ -830,13 +830,33 @@ class WanVAE_(nn.Module):
         self.clear_cache()
         if isinstance(scale[0], torch.Tensor):
             scale0 = scale[0]
+        else:
+            scale0 = torch.as_tensor(scale[0], device=z.device, dtype=z.dtype)
+        if isinstance(scale[1], torch.Tensor):
             scale1 = scale[1]
-            if scale0.device != z.device or scale0.dtype != z.dtype:
-                scale0 = scale0.to(device=z.device, dtype=z.dtype)
-            if scale1.device != z.device or scale1.dtype != z.dtype:
-                scale1 = scale1.to(device=z.device, dtype=z.dtype)
-            if scale0 is not scale[0] or scale1 is not scale[1]:
-                scale[0], scale[1] = scale0, scale1
+        else:
+            scale1 = torch.as_tensor(scale[1], device=z.device, dtype=z.dtype)
+        if scale0.device != z.device or scale0.dtype != z.dtype:
+            scale0 = scale0.to(device=z.device, dtype=z.dtype)
+        if scale1.device != z.device or scale1.dtype != z.dtype:
+            scale1 = scale1.to(device=z.device, dtype=z.dtype)
+        if isinstance(scale, (list, tuple)):
+            scale_container = type(scale)
+            updated = []
+            for value in (scale0, scale1):
+                updated.append(value)
+            # extend with remaining entries if any
+            if len(scale) > 2:
+                updated.extend(scale[2:])
+            scale = scale_container(updated)
+        if isinstance(scale, list):
+            scale[0], scale[1] = scale0, scale1
+        elif isinstance(scale, tuple):
+            # tuples are immutable; reassign the attribute so callers see the updated tensors
+            try:
+                self.scale = (scale0, scale1, *scale[2:])
+            except Exception:
+                pass
             if (
                 hasattr(z, "device")
                 and (z.device != scale0.device or z.device != scale1.device)
@@ -847,23 +867,21 @@ class WanVAE_(nn.Module):
                     f"scale0={scale0.device}/{scale0.dtype}, "
                     f"scale1={scale1.device}/{scale1.dtype}"
                 )
-            scale1_view = scale1.view(1, self.z_dim, 1, 1, 1)
-            scale0_view = scale0.view(1, self.z_dim, 1, 1, 1)
-            if (
-                scale1_view.device != z.device
-                or scale0_view.device != z.device
-                or scale1_view.dtype != z.dtype
-                or scale0_view.dtype != z.dtype
-            ):
-                print(
-                    "[OVI] WanVAE decode tensor devices -> "
-                    f"z={z.device}/{z.dtype}, "
-                    f"scale0={scale0_view.device}/{scale0_view.dtype}, "
-                    f"scale1={scale1_view.device}/{scale1_view.dtype}"
-                )
-            z = z / scale1_view + scale0_view
-        else:
-            z = z / scale[1] + scale[0]
+        scale1_view = scale1.view(1, self.z_dim, 1, 1, 1)
+        scale0_view = scale0.view(1, self.z_dim, 1, 1, 1)
+        if (
+            scale1_view.device != z.device
+            or scale0_view.device != z.device
+            or scale1_view.dtype != z.dtype
+            or scale0_view.dtype != z.dtype
+        ):
+            print(
+                "[OVI] WanVAE decode tensor devices -> "
+                f"z={z.device}/{z.dtype}, "
+                f"scale0={scale0_view.device}/{scale0_view.dtype}, "
+                f"scale1={scale1_view.device}/{scale1_view.dtype}"
+            )
+        z = z / scale1_view + scale0_view
         iter_ = z.shape[2]
         local_pbar = ProgressBar(iter_) if (pbar and ProgressBar is not None) else None
         x = self.conv2(z)

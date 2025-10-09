@@ -9,17 +9,17 @@ Custom nodes that bring Character.AI's **Ovi** video+audio generator to ComfyUI 
 ## Key Features
 
 - **Self-bootstrapping loader** – downloads MMAudio assets and the chosen Ovi fusion weights to `custom_nodes/ComfyUI-Ovi/ckpts`, then places the OVI safetensors in `models/diffusion_models/`.
-- **Precision toggle** – pick **Ovi-11B BF16** or the 24 GB-friendly **Ovi-11B FP8** from a dropdown; each mode is cached separately.
+- **Precision toggle** – pick **Ovi-11B BF16** or the 16-24 GB-friendly **Ovi-11B FP8** from a dropdown; each mode is cached separately.
 - **Optional CPU offload** – move large modules to system RAM when VRAM is tight.
 - **Attention selector** – flip between `auto`, FlashAttention, SDPA, Sage, etc., at runtime.
 - **Component reuse** – keep using the Wan 2.2 VAE and UMT5 text encoder you already installed (no duplicated files!); the component loader will point to the correct location (see below).
-- **Dloader auto-detects available GPUs; single-GPU setups hide the selector, while multi-GPU rigs get a dropdown to pick the target device.
+- **Dloader** - auto-detects available GPUs; single-GPU setups hide the selector, while multi-GPU rigs get a dropdown to pick the target device.
 
 ---
 
 ## Requirements
 
-- **GPU**: 24 GB (FP8 + offload) or 32 GB+ (BF16 without offload)
+- **GPU**: 16-24 GB (FP8 + offload) or >32 GB+ (BF16 without offload)
 - **CUDA stack**: PyTorch 2.4+, CUDA 12.x driver/runtime
 
 ---
@@ -39,7 +39,7 @@ Restart ComfyUI after installing.
 
 ## Weights Overview
 
-Handled automatically by **Ovi Engine Loader**:
+Handled **automatically** by **Ovi Engine Loader**:
 
 - `MMAudio/ext_weights/{best_netG.pt, v1-16.pth}`
 - `Ovi-11B-bf16.safetensors` or `Ovi-11B-fp8.safetensors` (renamed and parked in `models/diffusion_models/`)
@@ -47,7 +47,7 @@ Handled automatically by **Ovi Engine Loader**:
 Provide manually if missing (usually already present in Wan setups). Choose only one text encoder:
 
 - BF16 (>32 GB VRAM) -> [`umt5-xxl-enc-bf16.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-bf16.safetensors) → `models/text_encoders`
-- FP8 (24 GB VRAM) -> [`umt5-xxl-enc-fp8_e4m3fn.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-fp8_e4m3fn.safetensors) → `models/text_encoders`
+- FP8 (16-24 GB VRAM) -> [`umt5-xxl-enc-fp8_e4m3fn.safetensors`](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/umt5-xxl-enc-fp8_e4m3fn.safetensors) → `models/text_encoders`
 - [`wan2.2_vae.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/main/split_files/vae/wan2.2_vae.safetensors) → `models/vae`
 
 Directory sketch:

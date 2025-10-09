@@ -1,4 +1,5 @@
 import logging
+import os
 import traceback
 from pathlib import Path
 
@@ -651,9 +652,19 @@ class OviFusionEngine:
                 if video_latents.dim() != 4:
                     raise ValueError("video_latents must have shape [channels, frames, height, width].")
 
+                prefer_fp32 = os.getenv("OVI_FORCE_VAE_DECODE_FP32", "").strip().lower() in ("1", "true", "yes")
+                force_cpu_decode = os.getenv("OVI_VAE_DECODE_ON_CPU", "").strip().lower() in ("1", "true", "yes")
+                if force_cpu_decode:
+                    prefer_fp32 = True
+
                 dtype_candidates: list[torch.dtype] = []
                 initial_dtype = getattr(self.vae_model_video, "dtype", None) or self.target_dtype or video_latents.dtype
-                for candidate in (initial_dtype, torch.float16, torch.float32):
+                ordered_candidates = (
+                    (torch.float32, initial_dtype, torch.float16)
+                    if prefer_fp32
+                    else (initial_dtype, torch.float16, torch.float32)
+                )
+                for candidate in ordered_candidates:
                     if candidate is None:
                         continue
                     if candidate not in dtype_candidates:
@@ -679,8 +690,14 @@ class OviFusionEngine:
                         if hasattr(video_vae, "dtype"):
                             video_vae.dtype = attempt_dtype
                         video_tensor = video_latents.to(attempt_dtype)
-                        if video_tensor.device != self.device:
-                            video_tensor = video_tensor.to(self.device)
+                        decode_device = "cpu" if force_cpu_decode else self.device
+                        if isinstance(decode_device, torch.device):
+                            decode_device = str(decode_device)
+                        if isinstance(decode_device, int):
+                            decode_device = f"cuda:{decode_device}"
+                        target_torch_device = torch.device(decode_device) if decode_device is not None else video_tensor.device
+                        if video_tensor.device != target_torch_device:
+                            video_tensor = video_tensor.to(target_torch_device)
                         print(
                             "[OVI] decode_latents attempt -> "
                             f"dtype={attempt_dtype}, "
@@ -688,7 +705,7 @@ class OviFusionEngine:
                             f"tensor_device={video_tensor.device}/{video_tensor.dtype}, "
                             f"engine_device={self.device}, cpu_offload={self.cpu_offload}"
                         )
-                        video_vae = self._set_video_vae_device(self.device)
+                        video_vae = self._set_video_vae_device(decode_device)
                         scale = getattr(video_vae, "scale", None)
                         if isinstance(scale, (list, tuple)):
                             scale_dtype = getattr(video_vae, "dtype", attempt_dtype)
@@ -713,7 +730,7 @@ class OviFusionEngine:
                             )
                         decoded_video = video_vae.decode_latents(
                             video_tensor,
-                            device=self.device,
+                            device=decode_device,
                             normalize=True,
                             return_cpu=to_cpu,
                             dtype=torch.float32,

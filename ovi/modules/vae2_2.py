@@ -1131,7 +1131,7 @@ class Wan2_2_VAE:
         try:
             if not isinstance(zs, list):
                 raise TypeError("zs should be a list")
-            with amp.autocast(dtype=self.dtype):
+            with amp.autocast(dtype=self.dtype, enabled=(self.dtype != torch.float32)):
                 return [
                     self.model.decode(u.unsqueeze(0),
                                       self.scale).float().clamp_(-1,
@@ -1146,7 +1146,7 @@ class Wan2_2_VAE:
         try:
             if not isinstance(zs, torch.Tensor):
                 raise TypeError("zs should be a torch.Tensor")
-            with amp.autocast(dtype=self.dtype):
+            with amp.autocast(dtype=self.dtype, enabled=(self.dtype != torch.float32)):
                 return self.model.decode(zs, self.scale).float().clamp_(-1,
                                                                  1)
 
@@ -1184,7 +1184,7 @@ class Wan2_2_VAE:
             f"[OVI] VAE decode devices -> latents={tensor.device}/{tensor.dtype}, "
             f"model={param_device}, return_cpu={return_cpu}"
         )
-        with amp.autocast(dtype=self.dtype):
+        with amp.autocast(dtype=self.dtype, enabled=(self.dtype != torch.float32)):
             if ProgressBar is not None:
                 decoded = self.model.decode(tensor, self.scale, pbar=pbar).float()
             else:

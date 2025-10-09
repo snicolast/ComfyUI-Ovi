@@ -96,6 +96,7 @@ All nodes live under the **Ovi** category in the ComfyUI search dialog.
 - **Missing weights** – place the files manually in the paths above; the loader skips network calls when files already exist.
 - **Switching precision** – changing the dropdown spins up a new cached engine; you can hot-swap without restarting ComfyUI.
 - **Backend errors** – if FlashAttention/xFormers is unavailable, the selector falls back to `native`; check the console log for details.
+- **Noisy output** – This is a known bug in the Windows Portable version. For now, use the manual installation of ComfyUI instead.
 
 ---
 

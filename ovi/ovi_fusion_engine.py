@@ -656,6 +656,11 @@ class OviFusionEngine:
                 force_cpu_decode = os.getenv("OVI_VAE_DECODE_ON_CPU", "").strip().lower() in ("1", "true", "yes")
                 if force_cpu_decode:
                     prefer_fp32 = True
+                if prefer_fp32 or force_cpu_decode:
+                    print(
+                        "[OVI] video decode overrides -> "
+                        f"force_fp32={prefer_fp32}, force_cpu={force_cpu_decode}"
+                    )
 
                 dtype_candidates: list[torch.dtype] = []
                 initial_dtype = getattr(self.vae_model_video, "dtype", None) or self.target_dtype or video_latents.dtype

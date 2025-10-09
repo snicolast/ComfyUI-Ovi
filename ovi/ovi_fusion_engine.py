@@ -313,13 +313,20 @@ class OviFusionEngine:
                 except Exception:
                     pass
         scale = getattr(video_vae, "scale", None)
+        try:
+            video_vae.device = device
+        except Exception:
+            pass
         if isinstance(scale, (list, tuple)):
             scale_dtype = torch.float32 if device == "cpu" else getattr(video_vae, "dtype", None)
             def _move_scale_tensor(value):
                 if isinstance(value, torch.Tensor):
                     return value.to(device=device, dtype=scale_dtype) if scale_dtype is not None else value.to(device=device)
                 try:
-                    return torch.as_tensor(value, device=device, dtype=scale_dtype if scale_dtype is not None else None)
+                    kwargs = {"device": device}
+                    if scale_dtype is not None:
+                        kwargs["dtype"] = scale_dtype
+                    return torch.as_tensor(value, **kwargs)
                 except Exception:
                     return value
             moved = [_move_scale_tensor(value) for value in scale]
@@ -722,10 +729,11 @@ class OviFusionEngine:
                             )
                             last_decode_error = exc
                             continue
+                        raise
+                    finally:
                         self.target_dtype = original_target_dtype
                         if hasattr(video_vae, "dtype"):
                             video_vae.dtype = original_video_vae_dtype
-                        raise
 
                 if decoded_video is None:
                     self.target_dtype = original_target_dtype

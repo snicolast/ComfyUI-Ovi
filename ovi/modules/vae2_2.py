@@ -840,12 +840,22 @@ class WanVAE_(nn.Module):
             scale0 = scale0.to(device=z.device, dtype=z.dtype)
         if scale1.device != z.device or scale1.dtype != z.dtype:
             scale1 = scale1.to(device=z.device, dtype=z.dtype)
+        def _ensure_vec(tensor: torch.Tensor, name: str) -> torch.Tensor:
+            tensor = tensor.view(-1)
+            if tensor.numel() == 1:
+                tensor = tensor.expand(self.z_dim).clone()
+            elif tensor.numel() != self.z_dim:
+                raise ValueError(f"{name} must have {self.z_dim} elements, got {tensor.numel()}")
+            return tensor
+
+        scale0_vec = _ensure_vec(scale0, "scale[0]")
+        scale1_vec = _ensure_vec(scale1, "scale[1]")
+        scale0 = scale0_vec
+        scale1 = scale1_vec
+
         if isinstance(scale, (list, tuple)):
             scale_container = type(scale)
-            updated = []
-            for value in (scale0, scale1):
-                updated.append(value)
-            # extend with remaining entries if any
+            updated = [scale0, scale1]
             if len(scale) > 2:
                 updated.extend(scale[2:])
             scale = scale_container(updated)
@@ -857,16 +867,16 @@ class WanVAE_(nn.Module):
                 self.scale = (scale0, scale1, *scale[2:])
             except Exception:
                 pass
-            if (
-                hasattr(z, "device")
-                and (z.device != scale0.device or z.device != scale1.device)
-            ):
-                print(
+        if (
+            hasattr(z, "device")
+            and (z.device != scale0.device or z.device != scale1.device)
+        ):
+            print(
                     "[OVI] WanVAE decode tensor devices -> "
                     f"z={z.device}/{z.dtype}, "
                     f"scale0={scale0.device}/{scale0.dtype}, "
-                    f"scale1={scale1.device}/{scale1.dtype}"
-                )
+                f"scale1={scale1.device}/{scale1.dtype}"
+            )
         scale1_view = scale1.view(1, self.z_dim, 1, 1, 1)
         scale0_view = scale0.view(1, self.z_dim, 1, 1, 1)
         if (
@@ -1155,13 +1165,25 @@ class Wan2_2_VAE:
 ) -> torch.Tensor:
         if not isinstance(latents, torch.Tensor):
             raise TypeError("latents should be a torch.Tensor")
-        target_device = device or self.device
-        tensor = latents.to(target_device, dtype=self.dtype)
+        print(f"[OVI] VAE source: {__file__}")
+        target_device = self.device if device is None else device
+        if isinstance(target_device, int):
+            target_device = f"cuda:{target_device}"
+        try:
+            param_device = next(self.model.parameters()).device
+        except StopIteration:
+            param_device = torch.device(target_device)
+        target_device = str(param_device)
+        tensor = latents.to(device=target_device, dtype=self.dtype)
         if tensor.ndim == 4:
             tensor = tensor.unsqueeze(0)
         elif tensor.ndim != 5:
             raise ValueError("latents must have shape [C,F,H,W] or [B,C,F,H,W]")
 
+        print(
+            f"[OVI] VAE decode devices -> latents={tensor.device}/{tensor.dtype}, "
+            f"model={param_device}, return_cpu={return_cpu}"
+        )
         with amp.autocast(dtype=self.dtype):
             if ProgressBar is not None:
                 decoded = self.model.decode(tensor, self.scale, pbar=pbar).float()

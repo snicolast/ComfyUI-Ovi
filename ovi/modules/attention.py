@@ -400,8 +400,8 @@ def attention(
             )
         else:
             attn_out = q_heads.new_zeros(q_heads.shape)
-            q_lens_list = q_lens_tensor.int().tolist()
-            k_lens_list = k_lens_tensor.int().tolist()
+            q_lens_list = q_lens_tensor.int().cpu().tolist()
+            k_lens_list = k_lens_tensor.int().cpu().tolist()
             for idx in range(b):
                 q_len = int(q_lens_list[idx])
                 k_len = int(k_lens_list[idx])
@@ -422,12 +422,55 @@ def attention(
         return attn_out.transpose(1, 2).contiguous().to(out_dtype)
     elif attention_mode == 'sdpa':
         # PyTorch native attention - always available, no extra dependencies
+        b, lq, _, _ = q.shape
+        lk = k.size(1)
+        device = q.device
+
         if q_lens is not None or k_lens is not None:
-            warnings.warn(
-                'Padding mask is disabled when using scaled_dot_product_attention. '
-                'It can have a significant impact on performance.',
-                stacklevel=2
+            # Respect per-sample padding by slicing to the real lengths before invoking SDPA.
+            q_lens_tensor = (
+                q_lens.to(dtype=torch.int32, device=device)
+                if q_lens is not None
+                else torch.full((b,), lq, dtype=torch.int32, device=device)
             )
+            k_lens_tensor = (
+                k_lens.to(dtype=torch.int32, device=device)
+                if k_lens is not None
+                else torch.full((b,), lk, dtype=torch.int32, device=device)
+            )
+
+            same_q = bool(torch.all(q_lens_tensor == lq))
+            same_k = bool(torch.all(k_lens_tensor == lk))
+
+            if not (same_q and same_k):
+                if k.dtype != q.dtype or k.device != device:
+                    k = k.to(device=device, dtype=q.dtype)
+                if v.dtype != q.dtype or v.device != device:
+                    v = v.to(device=device, dtype=q.dtype)
+
+                q_heads = q.transpose(1, 2).contiguous()
+                k_heads = k.transpose(1, 2).contiguous()
+                v_heads = v.transpose(1, 2).contiguous()
+
+                out_heads = q_heads.new_zeros(q_heads.shape)
+                q_lens_list = q_lens_tensor.int().cpu().tolist()
+                k_lens_list = k_lens_tensor.int().cpu().tolist()
+
+                for idx in range(b):
+                    q_len = int(q_lens_list[idx])
+                    k_len = int(k_lens_list[idx])
+                    if q_len <= 0 or k_len <= 0:
+                        continue
+                    slice_out = torch.nn.functional.scaled_dot_product_attention(
+                        q_heads[idx:idx + 1, :, :q_len, :].contiguous(),
+                        k_heads[idx:idx + 1, :, :k_len, :].contiguous(),
+                        v_heads[idx:idx + 1, :, :k_len, :].contiguous(),
+                        is_causal=causal,
+                        dropout_p=dropout_p,
+                    )
+                    out_heads[idx, :, :q_len, :] = slice_out[0]
+
+                return out_heads.transpose(1, 2).contiguous()
 
         # Handle dtype mismatch
         if not (q.dtype == k.dtype == v.dtype):

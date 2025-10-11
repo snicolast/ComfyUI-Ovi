@@ -8,10 +8,8 @@ import torch.nn.functional as F
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
-from .attention import flash_attention
+from .attention import safe_flash_attention
 from torch.utils.checkpoint import checkpoint
-from ovi.distributed_comms.communications import all_gather, all_to_all_4D
-from ovi.distributed_comms.parallel_states import nccl_info, get_sequence_parallel_state
 
 
 def gradient_checkpointing(module: nn.Module, *args, enabled: bool, **kwargs):
@@ -176,11 +174,7 @@ class WanRMSNorm(nn.Module):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        normed = self._norm(x.bfloat16()).type_as(x)
-        weight = self.weight
-        if weight.dtype != normed.dtype:
-            weight = weight.to(dtype=normed.dtype, device=normed.device)
-        return normed * weight
+        return self._norm(x.bfloat16()).type_as(x) * self.weight.bfloat16()
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
@@ -225,12 +219,6 @@ class WanSelfAttention(nn.Module):
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         # optional sequence parallelism
         # self.world_size = get_world_size()
-        self.use_sp = get_sequence_parallel_state()
-        if self.use_sp:
-            self.sp_size = nccl_info.sp_size
-            self.sp_rank = nccl_info.rank_within_group
-            assert self.num_heads % self.sp_size == 0, \
-                f"Num heads {self.num_heads} must be divisible by sp_size {self.sp_size}"
     # query, key, value function
     def qkv_fn(self, x):
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
@@ -249,20 +237,12 @@ class WanSelfAttention(nn.Module):
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
         q, k, v = self.qkv_fn(x)
-        if self.use_sp:
-            # print(f"[DEBUG SP] Doing all to all to shard head")
-            q = all_to_all_4D(q, scatter_dim=2, gather_dim=1)
-            k = all_to_all_4D(k, scatter_dim=2, gather_dim=1)
-            v = all_to_all_4D(v, scatter_dim=2, gather_dim=1) # [B, L, H/P, C/H]
-        x = flash_attention(
+        x = safe_flash_attention(
             q=rope_apply(q, grid_sizes, freqs),
             k=rope_apply(k, grid_sizes, freqs),
             v=v,
             k_lens=seq_lens,
             window_size=self.window_size)
-        if self.use_sp: 
-            # print(f"[DEBUG SP] Doing all to all to shard sequence")
-            x = all_to_all_4D(x, scatter_dim=1, gather_dim=2) # [B, L/P, H, C/H]
         # output
         x = x.flatten(2)
         x = self.o(x)
@@ -290,7 +270,7 @@ class WanT2VCrossAttention(WanSelfAttention):
         q, k, v = self.qkv_fn(x, context)
 
         # compute attention
-        x = flash_attention(q, k, v, k_lens=context_lens)
+        x = safe_flash_attention(q, k, v, k_lens=context_lens)
 
         # output
         x = x.flatten(2)
@@ -339,23 +319,11 @@ class WanI2VCrossAttention(WanSelfAttention):
         """
         q, k, v, k_img, v_img = self.qkv_fn(x, context)
 
-        if self.use_sp:
-            # print(f"[DEBUG SP] Doing all to all to shard head")
-            q = all_to_all_4D(q, scatter_dim=2, gather_dim=1)  
-            k = torch.chunk(k, self.sp_size, dim=2)[self.sp_rank]
-            v = torch.chunk(v, self.sp_size, dim=2)[self.sp_rank]
-            k_img = torch.chunk(k_img, self.sp_size, dim=2)[self.sp_rank]
-            v_img = torch.chunk(v_img, self.sp_size, dim=2)[self.sp_rank]
-            
         # [B, L, H/P, C/H]
         # k_img: [B, L, H, C/H]
-        img_x = flash_attention(q, k_img, v_img, k_lens=None)
+        img_x = safe_flash_attention(q, k_img, v_img, k_lens=None)
         # compute attention
-        x = flash_attention(q, k, v, k_lens=context_lens)
-        if self.use_sp: 
-            # print(f"[DEBUG SP] Doing all to all to shard sequence")
-            x = all_to_all_4D(x, scatter_dim=1, gather_dim=2) # [B, L/P, H, C/H]
-            
+        x = safe_flash_attention(q, k, v, k_lens=context_lens)
         # output
         x = x.flatten(2)
         img_x = img_x.flatten(2)
@@ -375,10 +343,7 @@ class ModulationAdd(nn.Module):
         self.modulation = nn.Parameter(torch.randn(1, num, dim) / dim**0.5)
 
     def forward(self, e):
-        modulation = self.modulation
-        if modulation.dtype != e.dtype:
-            modulation = modulation.to(dtype=e.dtype, device=e.device)
-        return modulation + e
+        return self.modulation.bfloat16() + e.bfloat16()
 
 class WanAttentionBlock(nn.Module):
 
@@ -503,10 +468,7 @@ class Head(nn.Module):
         """
         assert e.dtype == torch.bfloat16
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            modulation = self.modulation
-            if modulation.dtype != torch.bfloat16:
-                modulation = modulation.bfloat16()
-            e = (modulation.unsqueeze(0) + e.unsqueeze(2)).chunk(2, dim=2) # 1 1 2 D, B L 1 D -> B L 2 D -> 2 * (B L 1 D)
+            e = (self.modulation.bfloat16().unsqueeze(0) + e.unsqueeze(2)).chunk(2, dim=2) # 1 1 2 D, B L 1 D -> B L 2 D -> 2 * (B L 1 D)
             x = (self.head(self.norm(x) * (1 + e[1].squeeze(2)) + e[0].squeeze(2)))
         return x
 
@@ -641,12 +603,6 @@ class WanModel(ModelMixin, ConfigMixin):
         self.time_embedding = nn.Sequential(
             nn.Linear(freq_dim, dim), nn.SiLU(), nn.Linear(dim, dim))
         self.time_projection = nn.Sequential(nn.SiLU(), nn.Linear(dim, dim * 6))
-        self.use_sp = get_sequence_parallel_state() # seq parallel
-        if self.use_sp:
-            self.sp_size = nccl_info.sp_size
-            self.sp_rank = nccl_info.rank_within_group
-            assert self.num_heads % self.sp_size == 0, \
-                f"Num heads {self.num_heads} must be divisible by sp_size {self.sp_size}"
         # blocks
         ## so i2v and tt2a share the same cross attention while t2v and t2a share the same cross attention
         cross_attn_type = 't2v_cross_attn' if model_type in ['t2v', 't2a', 'ti2v'] else 'i2v_cross_attn'
@@ -759,36 +715,6 @@ class WanModel(ModelMixin, ConfigMixin):
             e0 = self.time_projection(e).unflatten(2, (6, self.dim)) # [1, 26784, 6, 3072] - B, seq_len, 6, dim
             assert e.dtype == torch.bfloat16 and e0.dtype == torch.bfloat16
 
-        
-        if self.use_sp:
-            current_len = x.shape[1]
-            # we will pad up to the next multiple of sp_size: eg. [157] -> [160]
-            pad_size = (-current_len ) % self.sp_size  
-
-            if pad_size > 0:
-                padding = torch.zeros(
-                    x.shape[0], pad_size, x.shape[2],
-                    device=x.device,
-                    dtype=x.dtype
-                )
-                x = torch.cat([x, padding], dim=1)
-                e_padding = torch.zeros(
-                    e.shape[0], pad_size, e.shape[2],
-                    device=e.device,
-                    dtype=e.dtype
-                )
-                e = torch.cat([e, e_padding], dim=1)
-                e0_padding = torch.zeros(
-                    e0.shape[0], pad_size, e0.shape[2], e0.shape[3],
-                    device=e0.device,
-                    dtype=e0.dtype
-                )
-                e0 = torch.cat([e0, e0_padding], dim=1)
-
-            x = torch.chunk(x, self.sp_size, dim=1)[self.sp_rank]
-            e = torch.chunk(e, self.sp_size, dim=1)[self.sp_rank]
-            e0 = torch.chunk(e0, self.sp_size, dim=1)[self.sp_rank] 
-            
         # context
         context_lens = None
         context = self.text_embedding(
@@ -816,8 +742,6 @@ class WanModel(ModelMixin, ConfigMixin):
     def post_transformer_block_out(self, x, grid_sizes, e):
         # head
         x = self.head(x, e)
-        if self.use_sp: 
-            x = all_gather(x, dim=1)
         # unpatchify
         if self.is_audio_type:
             ## grid_sizes is [B 1] where 1 is L, 

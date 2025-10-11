@@ -1,15 +1,13 @@
 
 import torch
 import torch.nn as nn
-from ovi.modules.model import WanLayerNorm, WanModel, WanRMSNorm, gradient_checkpointing, rope_apply
-from ovi.modules.attention import flash_attention
-from ovi.distributed_comms.communications import all_gather, all_to_all_4D
-from ovi.distributed_comms.parallel_states import nccl_info, get_sequence_parallel_state
+from .model import WanLayerNorm, WanModel, WanRMSNorm, gradient_checkpointing, rope_apply
+from .attention import safe_flash_attention
 
 class FusionModel(nn.Module):
     def __init__(self, video_config=None, audio_config=None):
         super().__init__()
-        has_video = True 
+        has_video = True
         has_audio = True
         if video_config is not None:
             self.video_model = WanModel(**video_config)
@@ -17,7 +15,7 @@ class FusionModel(nn.Module):
             has_video = False
             self.video_model = None
             print("Warning: No video model is provided!")
-        
+
         if audio_config is not None:
             self.audio_model = WanModel(**audio_config)
         else:
@@ -28,15 +26,10 @@ class FusionModel(nn.Module):
         if has_video and has_audio:
             assert len(self.video_model.blocks) == len(self.audio_model.blocks)
             self.num_blocks = len(self.video_model.blocks)
-
-            self.use_sp = get_sequence_parallel_state()
-            if self.use_sp:
-                self.sp_size = nccl_info.sp_size
-                self.sp_rank = nccl_info.rank_within_group
             self.inject_cross_attention_kv_projections()
 
         self.init_weights()
-        
+
     def inject_cross_attention_kv_projections(self):
         for vid_block in self.video_model.blocks:
             vid_block.cross_attn.k_fusion = nn.Linear(vid_block.dim, vid_block.dim)
@@ -44,7 +37,7 @@ class FusionModel(nn.Module):
             vid_block.cross_attn.pre_attn_norm_fusion = WanLayerNorm(vid_block.dim, elementwise_affine=True)
             vid_block.cross_attn.norm_k_fusion = WanRMSNorm(vid_block.dim, eps=1e-6) if vid_block.qk_norm else nn.Identity()
 
-        
+
         for audio_block in self.audio_model.blocks:
             audio_block.cross_attn.k_fusion = nn.Linear(audio_block.dim, audio_block.dim)
             audio_block.cross_attn.v_fusion = nn.Linear(audio_block.dim, audio_block.dim)
@@ -90,41 +83,24 @@ class FusionModel(nn.Module):
             q, k, v = cross_attn_block.qkv_fn(src_seq, context)
             k_img = v_img = None
 
-        
-        if self.use_sp:
-            q = all_to_all_4D(q, scatter_dim=2, gather_dim=1)
-            k = torch.chunk(k, self.sp_size, dim=2)[self.sp_rank]
-            v = torch.chunk(v, self.sp_size, dim=2)[self.sp_rank]
-            if k_img is not None:
-                k_img = torch.chunk(k_img, self.sp_size, dim=2)[self.sp_rank]
-            if v_img is not None:
-                v_img = torch.chunk(v_img, self.sp_size, dim=2)[self.sp_rank]
-            
-        x = flash_attention(q, k, v, k_lens=context_lens)
+        x = safe_flash_attention(q, k, v, k_lens=context_lens)
 
         if k_img is not None:
-            img_x = flash_attention(q, k_img, v_img, k_lens=None)
+            img_x = safe_flash_attention(q, k_img, v_img, k_lens=None)
             x = x + img_x
 
-        is_vid = src_grid_sizes.shape[1] > 1
         # compute target attention
         target_seq = cross_attn_block.pre_attn_norm_fusion(target_seq)
         k_target = cross_attn_block.norm_k_fusion(cross_attn_block.k_fusion(target_seq)).view(b, -1, n, d)
         v_target = cross_attn_block.v_fusion(target_seq).view(b, -1, n, d)
-        if self.use_sp: 
-            k_target = all_to_all_4D(k_target, scatter_dim=2, gather_dim=1) # [B, L, H/P, C/H]
-            v_target = all_to_all_4D(v_target, scatter_dim=2, gather_dim=1) # [B, L, H/P, C/H]
-        
+
         q = rope_apply(q, src_grid_sizes, src_freqs)
         k_target = rope_apply(k_target, target_grid_sizes, target_freqs)
-        
-        target_x = flash_attention(q, k_target, v_target, k_lens=target_seq_lens)
-        
+
+        target_x = safe_flash_attention(q, k_target, v_target, k_lens=target_seq_lens)
+
         x = x + target_x
-        if self.use_sp:
-            x = all_to_all_4D(x, scatter_dim=1, gather_dim=2) # [B, L/P, H, C/H]
-        
-        x = x.flatten(2) # [B, L/P, C]
+        x = x.flatten(2)
 
         x = cross_attn_block.o(x)
         return x
@@ -141,7 +117,7 @@ class FusionModel(nn.Module):
                                             context,
                                             context_lens,
                                             src_e):
-        
+
         src_seq = src_seq + self.single_fusion_cross_attention_forward(attn_block.cross_attn,
                                                                        attn_block.norm3(src_seq),
                                                                        src_grid_sizes=src_grid_sizes,
@@ -157,7 +133,7 @@ class FusionModel(nn.Module):
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             src_seq = src_seq + y * src_e[5].squeeze(2)
         return src_seq
-        
+
     def single_fusion_block_forward(self,
                                     vid_block,
                                     audio_block,
@@ -253,9 +229,9 @@ class FusionModel(nn.Module):
         y=None,
         first_frame_is_clean=False,
         slg_layer=False
-    ):  
+    ):
 
-        assert clip_fea is None 
+        assert clip_fea is None
         assert y is None
 
         if vid is None or all([x is None for x in vid]):
@@ -264,7 +240,7 @@ class FusionModel(nn.Module):
             assert self.audio_model is not None
 
             return None, self.audio_model(x=audio, t=t, context=audio_context, seq_len=audio_seq_len, clip_fea=clip_fea_audio, y=None)
-        
+
         if audio is None or all([x is None for x in audio]):
             assert clip_fea_audio is None
             assert audio_context is None
@@ -272,7 +248,7 @@ class FusionModel(nn.Module):
             assert self.video_model is not None
 
             return self.video_model(x=vid, t=t, context=vid_context, seq_len=vid_seq_len, clip_fea=clip_fea, y=y, first_frame_is_clean=first_frame_is_clean), None
-        
+
         vid, vid_e, vid_kwargs = self.video_model.prepare_transformer_block_kwargs(
             x=vid, t=t, context=vid_context, seq_len=vid_seq_len, clip_fea=clip_fea, y=y, first_frame_is_clean=first_frame_is_clean
         )
@@ -318,7 +294,7 @@ class FusionModel(nn.Module):
                 with torch.no_grad():
                     mod.weight.div_(10.0)
 
-    
+
     def set_rope_params(self):
         self.video_model.set_rope_params()
         self.audio_model.set_rope_params()

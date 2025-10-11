@@ -11,7 +11,6 @@ from diffusers import FlowMatchEulerDiscreteScheduler
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
-from ovi.modules.attention import available_attention_backends, get_attention_backend, set_attention_backend
 from ovi.utils.checkpoint_manager import (
     OVI_MODEL_SOURCE_NAME,
     OVI_MODEL_TARGET_NAME,
@@ -32,6 +31,10 @@ from ovi.utils.model_loading_utils import (
     load_fusion_checkpoint,
 )
 from ovi.utils.processing_utils import clean_text, preprocess_image_tensor, snap_hw_to_multiple_of_32, scale_hw_to_area_divisible
+from ovi.modules.attention import (
+    available_attention_backends as attention_available_backends,
+    set_attention_backend as attention_set_backend,
+)
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = OmegaConf.load(PACKAGE_ROOT / 'configs' / 'inference' / 'inference_fusion.yaml')
@@ -164,9 +167,9 @@ class OviFusionEngine:
         self._requested_attention_backend = 'auto'
         try:
             self._check_cancel()
-            self._resolved_attention_backend = set_attention_backend('auto')
+            self._resolved_attention_backend = attention_set_backend('auto')
         except RuntimeError as exc:
-            available = ', '.join(available_attention_backends(include_auto=False))
+            available = ', '.join(attention_available_backends(include_auto=False))
             raise RuntimeError(
                 f"Failed to initialise attention backend (requested 'auto'). Available backends: {available or 'none'}"
             ) from exc
@@ -218,19 +221,16 @@ class OviFusionEngine:
             self.override_models(video_vae=overrides[0], text_model=overrides[1])
 
     def set_attention_backend(self, backend: str) -> str:
-        resolved = set_attention_backend(backend)
-        if backend.lower() == 'auto' and resolved == 'auto':
-            options = available_attention_backends(include_auto=False)
-            if options:
-                # Fall back to the first actual backend when attention module leaves auto unresolved
-                resolved = options[0]
+        try:
+            resolved = attention_set_backend(backend)
+        except (RuntimeError, ValueError) as exc:
+            available = ', '.join(attention_available_backends())
+            raise RuntimeError(
+                f"Failed to select attention backend '{backend}': {exc}. Available backends: {available or 'none'}"
+            ) from exc
         self._requested_attention_backend = backend
         self._resolved_attention_backend = resolved
-        logging.info(
-            'OVI attention backend set to %s (requested %s)',
-            resolved,
-            backend,
-        )
+        logging.info('OVI attention backend set to %s (requested %s)', resolved, backend)
         return resolved
 
     def _device_index(self) -> int:
@@ -391,7 +391,7 @@ class OviFusionEngine:
 
     @staticmethod
     def available_attention_backends(include_auto: bool = True):
-        return available_attention_backends(include_auto=include_auto)
+        return attention_available_backends(include_auto=include_auto)
 
     @torch.inference_mode()
     def generate(self,
@@ -411,10 +411,10 @@ class OviFusionEngine:
 
         try:
             self.ensure_loaded()
-            resolved_backend = set_attention_backend(self._requested_attention_backend)
+            resolved_backend = attention_set_backend(self._requested_attention_backend)
             self._resolved_attention_backend = resolved_backend
         except RuntimeError as exc:
-            available = ', '.join(available_attention_backends())
+            available = ', '.join(attention_available_backends())
             raise RuntimeError(
                 f"Failed to select attention backend '{self._requested_attention_backend}': {exc}. Available backends: {available or 'none'}"
             ) from exc

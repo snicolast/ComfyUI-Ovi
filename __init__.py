@@ -12,6 +12,7 @@ from .nodes.ovi_video_generator import OviVideoGenerator
 from .nodes.ovi_attention_selector import OviAttentionSelector
 from .nodes.ovi_wan_component_loader import OviWanComponentLoader
 from .nodes.ovi_latent_decoder import OviLatentDecoder
+from .nodes.ovi_blockswap import OviBlockSwap
 
 
 NODE_CLASS_MAPPINGS = {
@@ -20,6 +21,7 @@ NODE_CLASS_MAPPINGS = {
     "OviAttentionSelector": OviAttentionSelector,
     "OviWanComponentLoader": OviWanComponentLoader,
     "OviLatentDecoder": OviLatentDecoder,
+    "OviBlockSwap": OviBlockSwap,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -28,4 +30,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "OviAttentionSelector": "OVI Attention Selector",
     "OviWanComponentLoader": "OVI Wan Component Loader",
     "OviLatentDecoder": "OVI Latent Decoder",
+    "OviBlockSwap": "OVI BlockSwap",
 }

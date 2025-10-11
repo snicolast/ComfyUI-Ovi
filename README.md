@@ -21,7 +21,6 @@ Custom nodes that bring Character.AI's **Ovi** video+audio generator to ComfyUI 
 
 - **GPU**: 16-24 GB (FP8 + offload) or >32 GB+ (BF16 without offload)
 - **CUDA stack**: PyTorch 2.4+, CUDA 12.x driver/runtime
-- **SageAttention**: compile and install the [SageAttention](https://github.com/woct0rdho/SageAttention/tree/2.2.0) backend before running these nodes. If Sage is not compiled and installed (both), the video output will consist only of noise.
 
 ---
 
@@ -97,7 +96,6 @@ All nodes live under the **Ovi** category in the ComfyUI search dialog.
 - **Missing weights** – place the files manually in the paths above; the loader skips network calls when files already exist.
 - **Switching precision** – changing the dropdown spins up a new cached engine; you can hot-swap without restarting ComfyUI.
 - **Backend errors** – if FlashAttention/xFormers is unavailable, the selector falls back to `native`; check the console log for details.
-- **Noisy output** – Compile and install SageAttention (2.2.0).
 
 ---
 

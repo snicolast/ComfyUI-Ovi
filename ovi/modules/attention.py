@@ -1,7 +1,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
 import warnings
-from typing import List, Optional
+from typing import Optional
 
 try:
     import flash_attn_interface  # type: ignore
@@ -21,6 +21,15 @@ except Exception as exc:  # pragma: no cover - optional dependency
     FLASH_ATTN_2_AVAILABLE = False
     _FLASH_ATTN_2_ERROR = exc
 
+try:
+    from sageattention import sageattn as _sageattn  # type: ignore
+    SAGE_ATTENTION_AVAILABLE = True
+    _SAGE_ATTENTION_ERROR: Optional[Exception] = None
+except Exception as exc:  # pragma: no cover - optional dependency
+    _sageattn = None  # type: ignore
+    SAGE_ATTENTION_AVAILABLE = False
+    _SAGE_ATTENTION_ERROR = exc
+
 __all__ = [
     'flash_attention',
     'attention',
@@ -34,12 +43,14 @@ __all__ = [
 _BACKEND_AVAILABILITY = {
     'flash_attn_3': FLASH_ATTN_3_AVAILABLE,
     'flash_attn_2': FLASH_ATTN_2_AVAILABLE,
+    'sage': SAGE_ATTENTION_AVAILABLE,
     'sdpa': True,
 }
 
 _BACKEND_ERRORS = {
     'flash_attn_3': _FLASH_ATTN_3_ERROR,
     'flash_attn_2': _FLASH_ATTN_2_ERROR,
+    'sage': _SAGE_ATTENTION_ERROR,
     'sdpa': None,
 }
 
@@ -52,11 +63,12 @@ _BACKEND_ALIASES = {
     'flash_attention': 'flash_attn_2',
     'flash3': 'flash_attn_3',
     'flash2': 'flash_attn_2',
-    'sage': 'sdpa',
-    'sageattn': 'sdpa',
-    'sageattention': 'sdpa',
-    'sage_attn': 'sdpa',
-    'sage3': 'sdpa',
+    'sage': 'sage',
+    'sageattn': 'sage',
+    'sageattention': 'sage',
+    'sage_attn': 'sage',
+    'sage attention': 'sage',
+    'sage3': 'sage',
     'sdpa': 'sdpa',
 }
 
@@ -338,6 +350,76 @@ def attention(
             dtype=dtype,
             version=fa_version,
         )
+    elif attention_mode == 'sage':
+        if not SAGE_ATTENTION_AVAILABLE:
+            err = _SAGE_ATTENTION_ERROR
+            if err is not None:
+                raise RuntimeError("SageAttention backend requested but failed to initialise.") from err
+            raise RuntimeError("SageAttention backend requested but it is not available.")
+
+        b, lq, _, _ = q.shape
+        lk = k.size(1)
+        out_dtype = q.dtype
+        device = q.device
+
+        if q_lens is None:
+            q_lens_tensor = torch.full((b,), lq, dtype=torch.int32, device=device)
+        else:
+            q_lens_tensor = q_lens.to(dtype=torch.int32, device=device)
+
+        if k_lens is None:
+            k_lens_tensor = torch.full((b,), lk, dtype=torch.int32, device=device)
+        else:
+            k_lens_tensor = k_lens.to(dtype=torch.int32, device=device)
+
+        target_dtype = q.dtype
+        if k.dtype != target_dtype or k.device != device:
+            k = k.to(device=device, dtype=target_dtype)
+        if v.dtype != target_dtype or v.device != device:
+            v = v.to(device=device, dtype=target_dtype)
+
+        scale = softmax_scale
+
+        q_heads = q.transpose(1, 2).contiguous()
+        k_heads = k.transpose(1, 2).contiguous()
+        v_heads = v.transpose(1, 2).contiguous()
+
+        same_q = bool(torch.all(q_lens_tensor == lq))
+        same_k = bool(torch.all(k_lens_tensor == lk))
+
+        if same_q and same_k:
+            attn_out = _sageattn(
+                q_heads,
+                k_heads,
+                v_heads,
+                causal=causal,
+                scale=scale,
+                dropout_p=dropout_p,
+                window_size=window_size,
+                deterministic=deterministic,
+            )
+        else:
+            attn_out = q_heads.new_zeros(q_heads.shape)
+            q_lens_list = q_lens_tensor.int().tolist()
+            k_lens_list = k_lens_tensor.int().tolist()
+            for idx in range(b):
+                q_len = int(q_lens_list[idx])
+                k_len = int(k_lens_list[idx])
+                if q_len <= 0 or k_len <= 0:
+                    continue
+                attn_slice = _sageattn(
+                    q_heads[idx:idx + 1, :, :q_len, :].contiguous(),
+                    k_heads[idx:idx + 1, :, :k_len, :].contiguous(),
+                    v_heads[idx:idx + 1, :, :k_len, :].contiguous(),
+                    causal=causal,
+                    scale=scale,
+                    dropout_p=dropout_p,
+                    window_size=window_size,
+                    deterministic=deterministic,
+                )
+                attn_out[idx, :, :q_len, :] = attn_slice[0]
+
+        return attn_out.transpose(1, 2).contiguous().to(out_dtype)
     elif attention_mode == 'sdpa':
         # PyTorch native attention - always available, no extra dependencies
         if q_lens is not None or k_lens is not None:
@@ -379,7 +461,7 @@ def _normalize_backend_name(name: Optional[str]) -> str:
 def _resolve_backend(requested: Optional[str]) -> str:
     backend = _normalize_backend_name(requested)
     if backend == 'auto':
-        for candidate in ('flash_attn_3', 'flash_attn_2', 'sdpa'):
+        for candidate in ('flash_attn_3', 'flash_attn_2', 'sage', 'sdpa'):
             if _BACKEND_AVAILABILITY.get(candidate, False):
                 return candidate
         raise RuntimeError('No attention backend is available. Install flash-attn or use PyTorch 2.0+ for SDPA.')
@@ -405,8 +487,14 @@ def get_attention_backend() -> str:
 
 
 def available_attention_backends(include_auto: bool = True) -> list[str]:
-    names = [name for name, available in _BACKEND_AVAILABILITY.items() if available]
-    names = sorted(set(names))
+    priority = ('flash_attn_3', 'flash_attn_2', 'sage', 'sdpa')
+    names = [name for name in priority if _BACKEND_AVAILABILITY.get(name, False)]
+    extra = [
+        name
+        for name, available in _BACKEND_AVAILABILITY.items()
+        if available and name not in priority
+    ]
+    names.extend(sorted(set(extra)))
     if include_auto:
         return ['auto'] + names
     return names
@@ -458,6 +546,22 @@ def safe_flash_attention(
             deterministic=deterministic,
             dtype=dtype,
             version=2,
+        )
+    if backend == 'sage':
+        return attention(
+            q,
+            k,
+            v,
+            q_lens=q_lens,
+            k_lens=k_lens,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            q_scale=q_scale,
+            causal=causal,
+            window_size=window_size,
+            deterministic=deterministic,
+            dtype=dtype,
+            attention_mode='sage',
         )
     return attention(
         q,

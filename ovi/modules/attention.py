@@ -408,9 +408,9 @@ def attention(
                 if q_len <= 0 or k_len <= 0:
                     continue
                 attn_slice = _sageattn(
-                    q_heads[idx:idx + 1, :, :q_len, :].contiguous(),
-                    k_heads[idx:idx + 1, :, :k_len, :].contiguous(),
-                    v_heads[idx:idx + 1, :, :k_len, :].contiguous(),
+                    q_heads[idx:idx + 1, :, :q_len, :],
+                    k_heads[idx:idx + 1, :, :k_len, :],
+                    v_heads[idx:idx + 1, :, :k_len, :],
                     causal=causal,
                     scale=scale,
                     dropout_p=dropout_p,
@@ -448,9 +448,9 @@ def attention(
                 if v.dtype != q.dtype or v.device != device:
                     v = v.to(device=device, dtype=q.dtype)
 
-                q_heads = q.transpose(1, 2).contiguous()
-                k_heads = k.transpose(1, 2).contiguous()
-                v_heads = v.transpose(1, 2).contiguous()
+                q_heads = q.transpose(1, 2)
+                k_heads = k.transpose(1, 2)
+                v_heads = v.transpose(1, 2)
 
                 out_heads = q_heads.new_zeros(q_heads.shape)
                 q_lens_list = q_lens_tensor.int().cpu().tolist()
@@ -462,9 +462,9 @@ def attention(
                     if q_len <= 0 or k_len <= 0:
                         continue
                     slice_out = torch.nn.functional.scaled_dot_product_attention(
-                        q_heads[idx:idx + 1, :, :q_len, :].contiguous(),
-                        k_heads[idx:idx + 1, :, :k_len, :].contiguous(),
-                        v_heads[idx:idx + 1, :, :k_len, :].contiguous(),
+                        q_heads[idx:idx + 1, :, :q_len, :],
+                        k_heads[idx:idx + 1, :, :k_len, :],
+                        v_heads[idx:idx + 1, :, :k_len, :],
                         is_causal=causal,
                         dropout_p=dropout_p,
                     )

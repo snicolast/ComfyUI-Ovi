@@ -519,19 +519,21 @@ class WanVAE_(nn.Module):
         t = x.shape[2]
         iter_ = 1 + (t - 1) // 4
         ## 对encode输入的x，按时间拆分为1、4、4、4....
+        out_chunks = []
         for i in range(iter_):
             self._enc_conv_idx = [0]
             if i == 0:
-                out = self.encoder(
+                chunk = self.encoder(
                     x[:, :, :1, :, :],
                     feat_cache=self._enc_feat_map,
                     feat_idx=self._enc_conv_idx)
             else:
-                out_ = self.encoder(
+                chunk = self.encoder(
                     x[:, :, 1 + 4 * (i - 1):1 + 4 * i, :, :],
                     feat_cache=self._enc_feat_map,
                     feat_idx=self._enc_conv_idx)
-                out = torch.cat([out, out_], 2)
+            out_chunks.append(chunk)
+        out = torch.cat(out_chunks, 2) if len(out_chunks) > 1 else out_chunks[0]
         mu, log_var = self.conv1(out).chunk(2, dim=1)
         if isinstance(scale[0], torch.Tensor):
             mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(
@@ -550,20 +552,21 @@ class WanVAE_(nn.Module):
             z = z / scale[1] + scale[0]
         iter_ = z.shape[2]
         x = self.conv2(z)
+        out_chunks = []
         for i in range(iter_):
             self._conv_idx = [0]
             if i == 0:
-                out = self.decoder(
+                chunk = self.decoder(
                     x[:, :, i:i + 1, :, :],
                     feat_cache=self._feat_map,
                     feat_idx=self._conv_idx)
             else:
-                out_ = self.decoder(
+                chunk = self.decoder(
                     x[:, :, i:i + 1, :, :],
                     feat_cache=self._feat_map,
                     feat_idx=self._conv_idx)
-                out = torch.cat([out, out_], 2)
-        return out
+            out_chunks.append(chunk)
+        return torch.cat(out_chunks, 2) if len(out_chunks) > 1 else out_chunks[0]
     
     def decode(self, z, scale):
         self.clear_cache()
@@ -575,19 +578,21 @@ class WanVAE_(nn.Module):
             z = z / scale[1] + scale[0]
         iter_ = z.shape[2]
         x = self.conv2(z)
+        out_chunks = []
         for i in range(iter_):
             self._conv_idx = [0]
             if i == 0:
-                out = self.decoder(
+                chunk = self.decoder(
                     x[:, :, i:i + 1, :, :],
                     feat_cache=self._feat_map,
                     feat_idx=self._conv_idx)
             else:
-                out_ = self.decoder(
+                chunk = self.decoder(
                     x[:, :, i:i + 1, :, :],
                     feat_cache=self._feat_map,
                     feat_idx=self._conv_idx)
-                out = torch.cat([out, out_], 2)
+            out_chunks.append(chunk)
+        out = torch.cat(out_chunks, 2) if len(out_chunks) > 1 else out_chunks[0]
         self.clear_cache()
         return out
 

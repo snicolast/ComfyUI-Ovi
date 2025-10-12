@@ -802,21 +802,23 @@ class WanVAE_(nn.Module):
         x = patchify(x, patch_size=2)
         t = x.shape[2]
         iter_ = 1 + (t - 1) // 4
+        out_chunks = []
         for i in range(iter_):
             self._enc_conv_idx = [0]
             if i == 0:
-                out = self.encoder(
+                chunk = self.encoder(
                     x[:, :, :1, :, :],
                     feat_cache=self._enc_feat_map,
                     feat_idx=self._enc_conv_idx,
                 )
             else:
-                out_ = self.encoder(
+                chunk = self.encoder(
                     x[:, :, 1 + 4 * (i - 1):1 + 4 * i, :, :],
                     feat_cache=self._enc_feat_map,
                     feat_idx=self._enc_conv_idx,
                 )
-                out = torch.cat([out, out_], 2)
+            out_chunks.append(chunk)
+        out = torch.cat(out_chunks, 2) if len(out_chunks) > 1 else out_chunks[0]
         mu, log_var = self.conv1(out).chunk(2, dim=1)
         if isinstance(scale[0], torch.Tensor):
             mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(
@@ -895,26 +897,23 @@ class WanVAE_(nn.Module):
         iter_ = z.shape[2]
         local_pbar = ProgressBar(iter_) if (pbar and ProgressBar is not None) else None
         x = self.conv2(z)
+        out_chunks = []
         for i in range(iter_):
             self._conv_idx = [0]
-            if i == 0:
-                out = self.decoder(
-                    x[:, :, i:i + 1, :, :],
-                    feat_cache=self._feat_map,
-                    feat_idx=self._conv_idx,
-                    first_chunk=True,
-                )
-            else:
-                out_ = self.decoder(
-                    x[:, :, i:i + 1, :, :],
-                    feat_cache=self._feat_map,
-                    feat_idx=self._conv_idx,
-                )
-                out = torch.cat([out, out_], 2)
+            first_chunk = i == 0
+            decoder_kwargs = {"first_chunk": True} if first_chunk else {}
+            chunk = self.decoder(
+                x[:, :, i:i + 1, :, :],
+                feat_cache=self._feat_map,
+                feat_idx=self._conv_idx,
+                **decoder_kwargs,
+            )
+            out_chunks.append(chunk)
             if local_pbar is not None:
                 local_pbar.update(1)
         if local_pbar is not None and hasattr(local_pbar, "update_absolute"):
             local_pbar.update_absolute(0)
+        out = torch.cat(out_chunks, 2) if len(out_chunks) > 1 else out_chunks[0]
         out = unpatchify(out, patch_size=2)
         self.clear_cache()
         return out
@@ -1186,25 +1185,32 @@ class Wan2_2_VAE:
         )
         with amp.autocast(dtype=self.dtype, enabled=(self.dtype != torch.float32)):
             if ProgressBar is not None:
-                decoded = self.model.decode(tensor, self.scale, pbar=pbar).float()
+                decoded = self.model.decode(tensor, self.scale, pbar=pbar)
             else:
-                decoded = self.model.decode(tensor, self.scale).float()
-
-        if normalize:
-            vmin = decoded.amin()
-            vmax = decoded.amax()
-            if (vmin < -1.01) or (vmax > 1.01):
-                span = (vmax - vmin).clamp(min=1e-8)
-                decoded = (decoded - vmin) / span
-            else:
-                decoded = ((decoded + 1.0) * 0.5).clamp_(0.0, 1.0)
-            decoded = decoded.clamp_(0.0, 1.0)
-
-        if dtype is not None:
-            decoded = decoded.to(dtype)
+                decoded = self.model.decode(tensor, self.scale)
 
         if return_cpu:
             decoded = decoded.cpu()
+
+        working = decoded
+        if normalize:
+            if working.dtype != torch.float32:
+                working = working.to(torch.float32)
+            vmin = working.amin()
+            vmax = working.amax()
+            if (vmin < -1.01) or (vmax > 1.01):
+                span = (vmax - vmin).clamp(min=1e-8)
+                working = (working - vmin) / span
+            else:
+                working = ((working + 1.0) * 0.5).clamp_(0.0, 1.0)
+            working = working.clamp_(0.0, 1.0)
+        if dtype is not None:
+            if working is decoded and working.dtype != dtype:
+                working = working.to(dtype)
+            elif working.dtype != dtype:
+                working = working.to(dtype)
+
+        decoded = working
 
         return decoded.squeeze(0)
         
